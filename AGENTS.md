@@ -182,5 +182,6 @@ para los codecs de protocolo; R1 para el resto (README, config de ejemplo, loggi
 | Módulo que este simulador prueba | repo `minos` |
 | Catálogo de validación de pagos (fuente de verdad) | repo `judeca`, `validator/CamposOrdenesValidator.java` y `resources/properties/pagos/pagos.properties` |
 | README (guía para humanos, estado de avance por fase) | `README.md` de este repo |
+| **Cómo desplegar en el host real (`192.168.1.200`)** | **`DEPLOY.md`** — conexión SSH, advertencia de permisos en `config/`/`data/`, flujo completo verificado el 2026-09-28 |
 | **Mejoras de automatización en curso (SDD)** | **`specs/README.md`** — léelo si vas a tocar algo de particionado, devoluciones, firmas, volumen, o el servidor MCP; tiene el estado real de cada spec (implementado/bloqueado/borrador) |
 | Dueño de spec | Miguel Zavala |

@@ -48,14 +48,13 @@ pendiente de construir, por eso quedan "Bloqueado" y no "Borrador".
 **Al 2026-09-28** — hecho: MCP junto a la API + plugin (spec 011) y registro de cierre de sesión
 (spec 013), probados localmente con `docker compose`. Diseño de spec 005 cerrado. En orden:
 
-1. **Desplegar en el host `192.168.1.200`** (lo hace quien tenga acceso): `git pull && docker
-   compose up --build -d` en la carpeta del simulador. No borrar `data/` ni `config/`. Corta la
-   sesión con minos. El puerto 8090 (MCP) debe quedar accesible desde la VPN.
-2. **Verificar en el host:** `curl http://192.168.1.200:8090/health`; instalar el plugin
-   (`/plugin marketplace add inatento/banxico-simulator`, `/plugin install
-   banxico-simulator@banxico-simulator`) y pedir "¿Hay una sesión activa con el banco?"; cuando
-   minos reconecte, mandar un abono y confirmar `cierre` en `GET /session` al terminar una sesión.
-   Marcar los criterios pendientes de 011 y 013.
+1. **Desplegado el 2026-09-28** (spec 011 + 013) — ver `DEPLOY.md` para el flujo exacto (conexión
+   SSH, un problema de permisos en `config/` ya encontrado y resuelto ahí, verificación). Cortó la
+   sesión con minos, como se esperaba.
+2. **Pendiente:** minos no reconectó solo tras el despliegue (no tiene reintento automático) —
+   hay que confirmar con quien administra minos que reconectó, y entonces: pedir "¿Hay una sesión
+   activa con el banco?" desde el plugin, mandar un abono, y confirmar `cierre` en `GET /session`
+   al terminar una sesión. Marcar los criterios pendientes de 011 y 013 cuando eso pase.
 3. **Implementar spec 005** (capa A primero — no requiere nada del host —, luego capa B,
    `deploy.sh`, `scripts/host/pruebas-red.sh`, `/capacidades`) y reescribir el skill para usar
    solo MCP.
