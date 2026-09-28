@@ -4,17 +4,34 @@ Servidor MCP (spec [011](../specs/011-mcp.md)) que envuelve la API de control HT
 (`ControlServer.java`). No la reemplaza — cada herramienta de aquí es una llamada HTTP directa a
 un endpoint que sigue funcionando igual por `curl`/`httpclient/*.http`.
 
-## Uso
+## Despliegue (modo normal): junto a la API, por HTTP
+
+`docker compose up --build` en la raíz del repo levanta este servidor como segundo servicio
+(`banxico-simulator-mcp`), publicado en `http://<host>:8090/mcp` (Streamable HTTP, sin estado).
+Habla con la API por la red interna de compose (`SIMULATOR_URL=http://banxico-simulator:8089`).
+
+Quien prueba no necesita nada de esta carpeta: instala el plugin de Claude Code
+([`../plugin/`](../plugin/README.md)), que ya apunta a esa URL.
+
+`GET /health` del propio MCP responde `{"status":"ok","simulatorUrl":...}` (lo usa el
+`HEALTHCHECK` del contenedor). Solo `POST /mcp` está soportado — al ser sin estado, no hay stream
+`GET` de notificaciones ni `DELETE` de sesión (responden 405).
+
+## Desarrollo local: stdio
 
 ```bash
 npm install
 SIMULATOR_URL=http://192.168.1.200:8089 node index.js
 ```
 
-`SIMULATOR_URL` apunta a donde esté corriendo el simulador (default `http://localhost:8089`, útil
-si el MCP corre en la misma máquina). Transporte: stdio (estándar para clientes MCP como Claude
-Code) — regístralo en la config de tu cliente MCP apuntando a `node index.js` con esa variable de
-entorno.
+Sin `MCP_TRANSPORT=http` corre por stdio, para registrarlo a mano en un cliente MCP como
+subproceso mientras se desarrolla una herramienta nueva.
+
+| Variable | Default | Qué es |
+|---|---|---|
+| `SIMULATOR_URL` | `http://localhost:8089` | URL de la API de control |
+| `MCP_TRANSPORT` | `stdio` | `http` en despliegue (lo fija el `Dockerfile`) |
+| `MCP_PORT` | `8090` | Puerto del modo HTTP |
 
 ## Herramientas expuestas
 
@@ -28,12 +45,17 @@ entorno.
 | `simulator_stop_heartbeat` | `POST /heartbeat/detener` (spec 009) |
 | `simulator_list_test_runs` | `GET /test-runs` |
 | `simulator_test_run_events` | `GET /test-runs/{id}/events` |
+| `simulator_start_load_campaign` | `POST /abonos/carga` (spec 012) |
+| `simulator_load_campaign_status` | `GET /abonos/carga/{id}` (spec 012) |
+| `simulator_stop_load_campaign` | `POST /abonos/carga/{id}/detener` (spec 012) |
+
+Como el MCP se despliega con la misma versión del repo que la API, las herramientas y los
+endpoints que envuelven quedan siempre sincronizados.
 
 ## Sin autenticación propia
 
-Mismo nivel de acceso que la API de control HTTP hoy — pensado para uso interno de desarrollo/QA,
-no para exponerse fuera de la red donde corre el simulador. Ver spec 011, "Preguntas abiertas",
-para la discusión pendiente sobre si esto necesita cambiar.
+Mismo nivel de acceso que la API de control HTTP — decisión documentada en spec 011: la VPN hacia
+la red del simulador es la frontera de confianza.
 
 ## Estado
 

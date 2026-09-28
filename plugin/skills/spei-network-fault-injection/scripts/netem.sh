@@ -38,8 +38,15 @@ IFACE="${SPEI_SIM_IFACE:-eth0}"
 NETSHOOT_IMG="nicolaka/netshoot"
 
 run() {
-  # shellcheck disable=SC2086
-  $RUNNER "$@"
+  if [[ -z "$RUNNER" ]]; then
+    "$@"
+  else
+    # ssh junta sus argumentos con espacios y el shell remoto los vuelve a
+    # partir -- sin escaparlos, '{{index .Config.Labels "owner"}}' o
+    # "scenario=netem: delay 100ms" llegan rotos al docker remoto.
+    # shellcheck disable=SC2086
+    $RUNNER "$(printf '%q ' "$@")"
+  fi
 }
 
 sidecar_exec() {

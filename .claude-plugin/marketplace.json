@@ -1,0 +1,14 @@
+{
+  "name": "banxico-simulator",
+  "owner": {
+    "name": "Miguel Zavala"
+  },
+  "description": "Herramientas de Claude Code para probar minos (Hermes MK I) contra el simulador SPEI.",
+  "plugins": [
+    {
+      "name": "banxico-simulator",
+      "source": "./plugin",
+      "description": "Skill y conexión MCP para probar minos contra el simulador SPEI sin clonar el repo."
+    }
+  ]
+}

@@ -10,10 +10,11 @@ que no se confunda con una implementación de la spec en Java.
 
 Todos los comandos de netem se aplican sobre la interfaz `eth0` del contenedor
 `banxico-simulator` vía `scripts/netem.sh` (sidecar `nicolaka/netshoot`
-compartiendo su network namespace). Como el contenedor es el servidor TCP
-(minos abre la conexión hacia 6001/6002 -- ver `SpeiServer.java` y
-`README.md:99-101`), un qdisc en su única interfaz afecta **ambas direcciones
-simétricamente** salvo que se indique lo contrario.
+compartiendo su network namespace). Un qdisc `root` en esa interfaz actúa
+sobre el tráfico **de salida** del contenedor: todo lo que el simulador manda
+(abonos, `AreYouAlive`, respuestas ARA y de la API de control), no lo que
+recibe de minos. Para la dirección minos→simulador hace falta el ingress con
+`ifb` de la fila 6.
 
 | # | Variación (spec 005) | Comando | Notas |
 |---|---|---|---|
@@ -92,8 +93,8 @@ scripts/netem.sh lock-release
 
 Si el host Docker no soporta `ifb` (módulo no cargable, común en algunos
 kernels de VM), repórtalo al usuario como limitación y ofrece degradar el
-escenario a throttling simétrico (`tbf` simple en `eth0`, cubre ambas
-direcciones igual) en vez de bloquear todo el plan por esto.
+escenario a throttling solo de salida (`tbf` simple en `eth0`, afecta lo
+que el simulador manda hacia minos) en vez de bloquear todo el plan por esto.
 
 ## Preguntas abiertas de la spec (sin resolver -- decide con el usuario si aplican)
 

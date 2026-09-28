@@ -77,8 +77,13 @@ docker compose up --build
 `config/` y `data/` quedan montados como bind mounts (no volúmenes nombrados) a propósito:
 `config/` es donde tú colocas `minos-public-cert.pem` a mano, y `data/` es donde puedes inspeccionar
 `banxicosim.mv.db` con cualquier cliente H2 sin entrar al contenedor. Puertos expuestos: `6001`
-(SPEI), `6002` (ARA), `8089` (API de control — ver abajo). El `Dockerfile` incluye un
-`HEALTHCHECK` contra `GET /health`.
+(SPEI), `6002` (ARA), `8089` (API de control — ver abajo) y `8090` (servidor MCP). El `Dockerfile`
+incluye un `HEALTHCHECK` contra `GET /health`.
+
+`docker compose up` levanta **dos servicios**: el simulador y, a su lado, el servidor MCP
+(`mcp-server/`, spec 011) en modo HTTP. El MCP habla con la API por la red interna de compose y
+publica `http://<host>:8090/mcp`, que es a donde apunta el plugin de Claude Code
+([`plugin/`](plugin/README.md)) — así quien prueba solo instala el plugin, sin clonar este repo.
 
 **Portabilidad — variables de entorno.** Cualquier clave de `simulator.properties` se puede
 sobreescribir con una variable de entorno del mismo nombre en mayúsculas y puntos por guión bajo

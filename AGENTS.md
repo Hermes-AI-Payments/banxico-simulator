@@ -18,8 +18,9 @@ desde afuera, no modifica ningún módulo de MK I.
 
 Quien pregunte "¿qué hay en este repo?", "¿cómo empiezo?" o algo igual de
 abierto puede no tener ningún trasfondo técnico — este simulador está
-pensado para poder probarse solo clonando el repo y pidiéndoselo a Claude en
-español normal, sin saber programar. Responde con ese público en mente:
+pensado para poder probarse sin clonar el repo — solo instalando el plugin
+de Claude Code y pidiéndoselo a Claude en español normal, sin saber
+programar. Responde con ese público en mente:
 
 - **No te quedes solo en la descripción técnica** — después de dar contexto,
   invita explícitamente a probar algo real, con un ejemplo concreto que
@@ -43,7 +44,7 @@ Ejemplos que puedes ofrecer tal cual, en lenguaje natural:
   "abono") de prueba real y cuenta qué pasó.
 - **"Simula que la red va lenta (100ms de retraso) mientras mandas un pago
   de prueba"** — activa el skill `spei-network-fault-injection` (basado en
-  spec 005, ver `.claude/skills/`): antes de tocar nada real, propone el
+  spec 005, ver `plugin/skills/`): antes de tocar nada real, propone el
   plan completo en español y espera que la persona lo apruebe.
 
 Dos cosas tienen que estar listas para que esto funcione — si algo no
@@ -54,13 +55,19 @@ responde, revisa esto antes que nada:
    entrar a otros sistemas internos de la empresa desde fuera de la
    oficina). Sin eso, es como intentar llamar a alguien sin señal: no hay
    error claro, simplemente no responde.
-2. **Claude Code debe abrirse dentro de la carpeta `banxico-simulator/`
-   misma, no en una carpeta que solo la contenga** — si se abre un nivel
-   arriba, la conexión con el simulador no se carga y ninguno de los
-   ejemplos de arriba va a funcionar. La primera vez que sí se abre en el
-   lugar correcto, Claude Code pregunta si confía en la configuración de
-   este proyecto — hay que aceptar ese aviso una sola vez; después queda
-   recordado.
+2. **El plugin `banxico-simulator` tiene que estar instalado en Claude Code**
+   — es lo que trae la conexión con el simulador y el skill de pruebas de
+   red. Se instala una sola vez, desde cualquier carpeta, con estos dos
+   comandos dentro de Claude Code:
+
+   ```
+   /plugin marketplace add inatento/banxico-simulator
+   /plugin install banxico-simulator@banxico-simulator
+   ```
+
+   No hace falta clonar este repo ni instalar nada más. Si el simulador
+   vive en otra dirección que la de siempre (`192.168.1.200`), se ajusta con
+   la variable de entorno `BANXICO_SIM_MCP_URL` (ver `plugin/README.md`).
 
 ## 3. Mapa de la arquitectura
 
@@ -83,6 +90,10 @@ src/main/java/mx/endcom/hermes/banxicosim/
   validation/                — reglas de campos por tipo de pago (fuente: judeca.CamposOrdenesValidator)
   persistence/H2Store.java   — bitácora de corridas de prueba en H2 (fase 6)
 config/simulator.properties.example  — plantilla de configuración (copiar a simulator.properties)
+mcp-server/                  — servidor MCP (Node, spec 011): envuelve la API de control; en
+                                despliegue corre como segundo servicio de docker-compose (:8090/mcp)
+plugin/                      — plugin de Claude Code: skill de pruebas de red + conexión al MCP
+.claude-plugin/marketplace.json — marketplace de un solo plugin, para instalar sin clonar el repo
 ```
 
 El flujo principal: `Main` arranca `SpeiServer`/`AraServer` → cada conexión entrante crea una

@@ -23,3 +23,19 @@ services:
       # MINOS_ENTITY_NAME: "MINOS-DEV"
       TZ: "America/Mexico_City"
     restart: unless-stopped
+
+  # Servidor MCP (spec 011) en modo HTTP, junto a la API: el plugin de Claude Code solo apunta a
+  # http://<host>:8090/mcp, sin clonar el repo ni instalar Node. Habla con la API por la red
+  # interna de compose, así que no depende del puerto publicado 8089.
+  banxico-simulator-mcp:
+    build: ./mcp-server
+    container_name: banxico-simulator-mcp
+    ports:
+      - "8090:8090"   # MCP (Streamable HTTP) -- endpoint /mcp
+    environment:
+      SIMULATOR_URL: "http://banxico-simulator:8089"
+      TZ: "America/Mexico_City"
+    depends_on:
+      banxico-simulator:
+        condition: service_healthy
+    restart: unless-stopped
