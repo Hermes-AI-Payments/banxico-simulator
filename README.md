@@ -191,7 +191,7 @@ dependencias nuevas, ver AGENTS.md &sect;5). Puerto configurable en `config/simu
 | Método | Ruta | Qué hace |
 |---|---|---|
 | `GET` | `/health` | Liveness del proceso. `{"status":"ok"}` |
-| `GET` | `/session` | Estado de la sesión SPEI más reciente: fase de handshake alcanzada, si sigue viva, día operativo declarado en `EnSesion`. `{"session":null}` si nunca se ha conectado minos — nunca un 500. |
+| `GET` | `/session` | Estado de la sesión SPEI más reciente: fase de handshake alcanzada, si sigue viva, día operativo declarado en `EnSesion`, desde cuándo está viva (`vivaDesde`) y, si ya terminó, cómo (`cierre`: hora, causa, detalle — spec 013). `{"session":null}` si nunca se ha conectado minos — nunca un 500. |
 | `POST` | `/abonos/validos` | Dispara un abono de prueba válido — mismo camino que el comando de consola `abono` (`SpeiSession.sendTestAbono(true)`). 409 con detalle si no hay sesión SPEI viva. |
 | `POST` | `/abonos/invalidos` | Igual, con contenido deliberadamente inválido (RFC roto) — equivalente a `abono-invalido`. |
 | `GET` | `/test-runs` | Lista las corridas de prueba registradas en H2 (tabla `test_run`), más reciente primero. |

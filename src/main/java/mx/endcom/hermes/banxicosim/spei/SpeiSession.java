@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,6 +84,11 @@ public final class SpeiSession implements Runnable {
 	private volatile boolean alive = false;
 	private volatile Phase phase = Phase.CONECTANDO;
 	private volatile LocalDate operationalDate;
+	private volatile Instant aliveSince;
+	/** Causa fijada por quien cierra la sesión a propósito (heartbeat roto, minos avisó que
+	 *  cierra) -- tiene prioridad sobre la excepción que ese cierre provoca en la lectura. */
+	private volatile SessionClosure requestedClosure;
+	private volatile SessionClosure closure;
 
 	/** Todo envío por {@code out} pasa por este lock -- el heartbeat corre en su propio hilo
 	 *  (ver {@link #startHeartbeat()}) y puede coincidir con un envío del hilo principal
@@ -142,6 +148,7 @@ public final class SpeiSession implements Runnable {
 
 	@Override
 	public void run() {
+		Exception failure = null;
 		try (socket;
 				DataInputStream in = new DataInputStream(socket.getInputStream());
 				DataOutputStream dataOut = new DataOutputStream(socket.getOutputStream())) {
@@ -159,19 +166,62 @@ public final class SpeiSession implements Runnable {
 			sendMsjCatalogos();
 			alive = true;
 			phase = Phase.VIVA;
+			aliveSince = Instant.now();
 			startHeartbeat();
 			logger.info("[SPEI] Sesión viva (handshake completo, fases 1-3 cumplidas)");
 
 			mainLoop(in);
-		} catch (java.io.EOFException eof) {
-			logger.info("[SPEI] Conexión cerrada por minos ({})", socket.getRemoteSocketAddress());
 		} catch (Exception e) {
-			logger.error("[SPEI] Sesión terminada con error: {}", e.getMessage(), e);
+			failure = e;
+			if (requestedClosure != null) {
+				logger.info("[SPEI] Sesión cerrada ({})", requestedClosure.cause().code());
+			} else if (e instanceof java.io.EOFException) {
+				logger.info("[SPEI] Conexión cerrada por minos ({})", socket.getRemoteSocketAddress());
+			} else {
+				logger.error("[SPEI] Sesión terminada con error: {}", e.getMessage(), e);
+			}
 		} finally {
 			alive = false;
 			phase = Phase.TERMINADA;
 			stopHeartbeat();
+			recordClosure(failure);
 		}
+	}
+
+	/** Spec 013 -- deja en la bitácora cómo terminó la sesión. La causa pedida explícitamente
+	 *  gana sobre la excepción, porque esa excepción es consecuencia del propio cierre. */
+	private void recordClosure(Exception failure) {
+		SessionClosure c = requestedClosure;
+		if (c == null) {
+			c = failure != null ? SessionClosure.fromException(failure)
+					: SessionClosure.now(SessionClosure.Cause.ERROR_IO, "socket cerrado sin causa registrada");
+		}
+		closure = c;
+		store.logEvent(runId, "INTERNO", "CierreSesion", 0, c.cause().code(), c.detail(), null);
+	}
+
+	/** Cierra la sesión dejando registrada la causa. Solo cuenta la primera causa pedida. */
+	private void requestClose(SessionClosure.Cause cause, String detail) {
+		synchronized (this) {
+			if (requestedClosure == null) {
+				requestedClosure = SessionClosure.now(cause, detail);
+			}
+		}
+		try {
+			socket.close();
+		} catch (Exception ignored) {
+			// ya estaba cerrado
+		}
+	}
+
+	/** Cómo terminó la sesión (spec 013), o {@code null} si sigue abierta. */
+	public SessionClosure closure() {
+		return closure;
+	}
+
+	/** Cuándo quedó viva (handshake completo), o {@code null} si no llegó a esa fase. */
+	public Instant aliveSince() {
+		return aliveSince;
 	}
 
 	// ---- Fase 1 ----
@@ -315,8 +365,11 @@ public final class SpeiSession implements Runnable {
 				}
 				logger.debug("[SPEI] >> AreYouAlive (heartbeat)");
 			} catch (Exception e) {
-				logger.warn("[SPEI] Heartbeat falló, deteniéndolo: {}", e.getMessage());
+				logger.warn("[SPEI] Heartbeat falló, cerrando la sesión: {}", e.getMessage());
 				heartbeat.shutdown();
+				// Si ya no se puede escribir, la conexión está rota: sin cerrarla, la lectura puede
+				// quedarse bloqueada indefinidamente si minos desapareció sin mandar FIN.
+				requestClose(SessionClosure.Cause.HEARTBEAT_FALLO, e.getMessage());
 			}
 		}, 3, 3, TimeUnit.SECONDS);
 	}
@@ -352,6 +405,7 @@ public final class SpeiSession implements Runnable {
 				case SpeiProtocol.OP_IAMALIVE -> logger.info("[SPEI] << IAmAlive");
 				case SpeiProtocol.OP_DEADSRVR, SpeiProtocol.OP_SMTTYCLOSE, SpeiProtocol.OP_NOSERVICE -> {
 					logger.info("[SPEI] minos cerró la sesión (op {})", frame.operation());
+					requestClose(SessionClosure.Cause.MINOS_CERRO, "op " + frame.operation());
 					return;
 				}
 				default -> logger.warn("[SPEI] Código de operación no manejado en v1: {} ({} bytes de cuerpo)",

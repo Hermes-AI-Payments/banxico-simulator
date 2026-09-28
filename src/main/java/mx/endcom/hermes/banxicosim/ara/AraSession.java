@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import mx.endcom.hermes.banxicosim.crypto.RsaCipher;
 import mx.endcom.hermes.banxicosim.crypto.SimulatorIdentity;
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
+import mx.endcom.hermes.banxicosim.spei.SessionClosure;
 import mx.endcom.hermes.banxicosim.wire.ByteReader;
 import mx.endcom.hermes.banxicosim.wire.ByteWriter;
 
@@ -78,10 +79,15 @@ public final class AraSession implements Runnable {
 				AraFrame frame = AraFrame.read(in);
 				handle(frame, out);
 			}
-		} catch (java.io.EOFException eof) {
-			logger.info("[ARA] Conexión cerrada por minos ({})", socket.getRemoteSocketAddress());
 		} catch (Exception e) {
-			logger.warn("[ARA] Sesión terminada con error: {}", e.getMessage());
+			if (e instanceof java.io.EOFException) {
+				logger.info("[ARA] Conexión cerrada por minos ({})", socket.getRemoteSocketAddress());
+			} else {
+				logger.warn("[ARA] Sesión terminada con error: {}", e.getMessage());
+			}
+			// Spec 013: el cierre también queda en la bitácora, no solo en consola.
+			SessionClosure c = SessionClosure.fromException(e);
+			store.logEvent(runId, "INTERNO", "CierreSesion", 0, c.cause().code(), c.detail(), null);
 		}
 	}
 

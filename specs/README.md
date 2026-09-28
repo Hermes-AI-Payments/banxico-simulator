@@ -27,20 +27,38 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [002](002-devoluciones.md) | Devoluciones (B↔H), alcance acotado al simulador | En progreso (B→H) |
 | [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Bloqueado (falta arnés) |
 | [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | En progreso (B→H) |
-| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Borrador |
+| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Diseño cerrado, listo para implementar (2026-09-28) |
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
 | [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Bloqueado (falta arnés) |
 | [008](008-msjcatalogos-contenido-real.md) | `MsjCatalogos` con contenido real | Implementado |
 | [009](009-perdida-de-iamalive.md) | Pérdida de `IAmAlive` (heartbeat) | Implementado |
 | [010](010-reconexion-a-media-transaccion.md) | Reconexión tras caída a media transacción | Borrador (depende de 001) |
-| [011](011-mcp.md) | Integración MCP sobre la API de control (arquitectura general) | En progreso |
+| [011](011-mcp.md) | Integración MCP sobre la API de control; MCP junto a la API y plugin | En progreso (falta desplegar) |
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
+| [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado (falta confirmar en host) |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las
 tres specs asumían poder extender **no existe en el repo** (`AGENTS.md` lo describe como
 "ad-hoc", nunca se comiteó). Decisión: reconstruirlo en Java bajo `src/test/java` (JUnit 5, ya
 está en `pom.xml`) en vez de Python, reutilizando las clases de cripto/wire ya existentes —
 pendiente de construir, por eso quedan "Bloqueado" y no "Borrador".
+
+## Siguiente paso (actualizar al avanzar)
+
+**Al 2026-09-28** — hecho: MCP junto a la API + plugin (spec 011) y registro de cierre de sesión
+(spec 013), probados localmente con `docker compose`. Diseño de spec 005 cerrado. En orden:
+
+1. **Desplegar en el host `192.168.1.200`** (lo hace quien tenga acceso): `git pull && docker
+   compose up --build -d` en la carpeta del simulador. No borrar `data/` ni `config/`. Corta la
+   sesión con minos. El puerto 8090 (MCP) debe quedar accesible desde la VPN.
+2. **Verificar en el host:** `curl http://192.168.1.200:8090/health`; instalar el plugin
+   (`/plugin marketplace add inatento/banxico-simulator`, `/plugin install
+   banxico-simulator@banxico-simulator`) y pedir "¿Hay una sesión activa con el banco?"; cuando
+   minos reconecte, mandar un abono y confirmar `cierre` en `GET /session` al terminar una sesión.
+   Marcar los criterios pendientes de 011 y 013.
+3. **Implementar spec 005** (capa A primero — no requiere nada del host —, luego capa B,
+   `deploy.sh`, `scripts/host/pruebas-red.sh`, `/capacidades`) y reescribir el skill para usar
+   solo MCP.
 
 ## Decisiones de alcance (2026-09-21)
 

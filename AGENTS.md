@@ -11,6 +11,9 @@ Banxico. No es una capacidad de soporte a operadores/participantes — es infrae
 pruebas para todo MK I, mismo patrón que `hermes-conectividad-monitor` (F-4): observa/participa
 desde afuera, no modifica ningún módulo de MK I.
 
+**Trabajo en curso y siguiente paso:** `specs/README.md` §"Siguiente paso" — léelo antes de
+proponer qué hacer.
+
 **Ficha de producto / especificación funcional:** `HERMES-MKI-VOBEDA/06_Iniciativas_Nuevas/Simulador_SPEI/01_especificacion_funcional.md`
 **Especificación técnica (protocolo exacto):** `HERMES-MKI-VOBEDA/06_Iniciativas_Nuevas/Simulador_SPEI/02_especificacion_tecnica.md`
 

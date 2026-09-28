@@ -48,6 +48,7 @@ public final class H2Store implements AutoCloseable {
 		Connection conn = DriverManager.getConnection("jdbc:h2:file:" + normalizedPath + ";AUTO_SERVER=TRUE");
 		H2Store store = new H2Store(conn);
 		store.initSchema();
+		store.closeUnfinishedRuns();
 		return store;
 	}
 
@@ -90,6 +91,33 @@ public final class H2Store implements AutoCloseable {
 			logger.warn("No fue posible registrar la corrida de prueba: {}", e.getMessage());
 		}
 		return id;
+	}
+
+	/**
+	 * Spec 013 -- al arrancar no hay ninguna sesión viva, así que toda corrida sin
+	 * {@code CierreSesion} terminó sin que quedara registrado cómo: apagado del simulador (el
+	 * shutdown hook de H2 cierra la base en paralelo al de Main y puede ganarle; H2 no permite
+	 * {@code DB_CLOSE_ON_EXIT=FALSE} junto con {@code AUTO_SERVER}), caída abrupta, o una corrida
+	 * de una versión anterior. Se cierran como {@code sin-registro}, con la hora de su último evento.
+	 */
+	private void closeUnfinishedRuns() {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"""
+				INSERT INTO test_event (run_id, occurred_at, direction, message_name, op_code, result, detail, raw_hex)
+				SELECT r.id, COALESCE((SELECT MAX(e.occurred_at) FROM test_event e WHERE e.run_id = r.id), r.started_at),
+				       'INTERNO', 'CierreSesion', 0, 'sin-registro', ?, NULL
+				FROM test_run r
+				WHERE NOT EXISTS (SELECT 1 FROM test_event e WHERE e.run_id = r.id AND e.message_name = 'CierreSesion')
+				""")) {
+			ps.setString(1, "Cierre no registrado (apagado del simulador, caída o versión anterior a spec 013); "
+					+ "hora = último evento de la corrida");
+			int closed = ps.executeUpdate();
+			if (closed > 0) {
+				logger.info("{} corrida(s) sin cierre registrado marcadas como 'sin-registro' (spec 013)", closed);
+			}
+		} catch (SQLException e) {
+			logger.warn("No fue posible cerrar las corridas pendientes: {}", e.getMessage());
+		}
 	}
 
 	public void logEvent(long runId, String direction, String messageName, int opCode, String result,

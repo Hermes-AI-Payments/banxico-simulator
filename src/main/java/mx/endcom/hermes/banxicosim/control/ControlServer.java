@@ -21,6 +21,7 @@ import com.sun.net.httpserver.HttpServer;
 
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
 import mx.endcom.hermes.banxicosim.spei.LoadCampaign;
+import mx.endcom.hermes.banxicosim.spei.SessionClosure;
 import mx.endcom.hermes.banxicosim.spei.SpeiServer;
 import mx.endcom.hermes.banxicosim.spei.SpeiSession;
 
@@ -120,6 +121,16 @@ public final class ControlServer {
 		details.put("alive", session.isAlive());
 		details.put("fase", session.phase().name());
 		details.put("diaOperativo", session.operationalDate() == null ? null : session.operationalDate().toString());
+		details.put("vivaDesde", session.aliveSince() == null ? null : session.aliveSince().toString());
+		SessionClosure closure = session.closure();
+		if (closure != null) {
+			// Spec 013: por qué y cuándo terminó -- antes una sesión TERMINADA no lo decía.
+			Map<String, Object> cierre = new LinkedHashMap<>();
+			cierre.put("at", closure.at().toString());
+			cierre.put("causa", closure.cause().code());
+			cierre.put("detalle", closure.detail());
+			details.put("cierre", cierre);
+		}
 		body.put("session", details);
 		return body;
 	}

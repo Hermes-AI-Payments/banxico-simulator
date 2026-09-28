@@ -16,7 +16,10 @@ GET {{baseUrl}}/health
 # Si nunca se ha conectado minos (o el simulador acaba de arrancar): {"session":null}
 # Si minos está conectado: {"session":{"runId":...,"channel":"SPEI","remoteAddress":"...",
 #   "alive":true|false,"fase":"CONECTANDO|CONEXION_RECIBIDA|GREETING_ENVIADO|LOGIN_RECIBIDO|
-#   CLVSIM_COMPLETADO|EN_SESION_ENVIADO|VIVA|TERMINADA","diaOperativo":"YYYY-MM-DD"|null}}
+#   CLVSIM_COMPLETADO|EN_SESION_ENVIADO|VIVA|TERMINADA","diaOperativo":"YYYY-MM-DD"|null,
+#   "vivaDesde":"<instante>"|null,
+#   "cierre":{"at":"<instante>","causa":"minos-cerro|heartbeat-fallo|error-io|error-protocolo|...",
+#             "detalle":"..."|null}   <- solo si la sesión ya terminó (spec 013)}}
 # "alive":true + fase "VIVA" == handshake completo (fases 1-3), listo para mandar/recibir órdenes
 # y abonos de prueba (ver 02-abonos.http).
 GET {{baseUrl}}/session
