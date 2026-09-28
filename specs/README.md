@@ -51,13 +51,14 @@ pendiente de construir, por eso quedan "Bloqueado" y no "Borrador".
 1. **Desplegado el 2026-09-28** (spec 011 + 013) — ver `DEPLOY.md` para el flujo exacto (conexión
    SSH, un problema de permisos en `config/` ya encontrado y resuelto ahí, verificación). Cortó la
    sesión con minos, como se esperaba.
-2. **Pendiente:** minos no reconectó solo tras el despliegue (no tiene reintento automático) —
-   hay que confirmar con quien administra minos que reconectó, y entonces: pedir "¿Hay una sesión
-   activa con el banco?" desde el plugin, mandar un abono, y confirmar `cierre` en `GET /session`
-   al terminar una sesión. Marcar los criterios pendientes de 011 y 013 cuando eso pase.
-3. **Implementar spec 005** (capa A primero — no requiere nada del host —, luego capa B,
-   `deploy.sh`, `scripts/host/pruebas-red.sh`, `/capacidades`) y reescribir el skill para usar
-   solo MCP.
+2. **Confirmado 2026-09-28:** minos reconectó (runId 5691, `vivaDesde` 23:06 UTC, heartbeat
+   intercambiándose normal). Falta nada más que cerrar formalmente los criterios pendientes de 011
+   y 013 (mandar un abono y confirmar `cierre` en `GET /session` al terminar una sesión) cuando
+   alguien lo dispare.
+3. **Implementar spec 005, capa A** — diseño de implementación completo (clases, config, rutas,
+   tools MCP, orden de commits con verificación contra minos real) ya en
+   `specs/005-variaciones-de-red.md` §"Diseño de implementación de Capa A", listo para codear.
+   Capa B (`deploy.sh`, `scripts/host/pruebas-red.sh`) queda para después, sobre capa A ya validada.
 
 ## Decisiones de alcance (2026-09-21)
 

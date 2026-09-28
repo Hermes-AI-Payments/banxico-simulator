@@ -164,6 +164,135 @@ bytes — no toca `spei/messages/*` ni `WireFraming`. Queda como **R1** (AGENTS.
   consulta capacidades, propone el plan, espera confirmación, aplica, observa y limpia. Sin SSH ni
   credenciales.
 
+## Diseño de implementación de Capa A (2026-09-28, listo para codear)
+
+Planeado en detalle el 2026-09-28 (sesión de Claude, con Miguel). Resuelve cómo construir §1 de
+"Decisiones de diseño" arriba sin tocar el formato de bytes de ningún mensaje.
+
+### Por qué no hay un decorador único de socket
+
+No existe un único choke-point de escritura en `SpeiSession` — 9 sitios llaman
+`synchronized (writeLock) { Frame.of(OP, body).writeTo(out); }` directamente (`sendGreeting`,
+`sendSmLoginReq`, `performClvSim`, `sendEnSesion`, `sendMsjCatalogos`, el heartbeat, `handleReenvio`,
+`handleOrdenTopoV`, `sendAbono`). `Frame.writeTo` nunca cambia — ningún formato de bytes se toca.
+
+- **Retraso/jitter y duplicación** necesitan saber qué mensaje se está mandando (para poder decir
+  "el próximo `Abonos`" o "la ocurrencia 3 de `Abonos`") — un decorador de bytes puro no puede
+  distinguir eso sin leer el op-code (acoplaría un componente pensado para ser R1 a leer el wire
+  format). Se resuelve con **un aviso explícito de `SpeiSession` antes de cada envío** (una llamada
+  a `RedVariacionControl.beforeWrite("Abonos")` justo antes del `synchronized(writeLock)` de cada
+  uno de los 9 sitios) — una línea por sitio, cero cambio a los codecs.
+- **Corte deliberado** se integra directamente con lo que spec 013 ya dejó listo:
+  `requestClose(SessionClosure.Cause.CORTE_DELIBERADO, "post-X")`, llamado después de soltar
+  `writeLock` (mismo patrón que el heartbeat ya usa).
+- **Throttling** sí es puro a nivel de bytes (no le importa qué mensaje es) — un
+  `ThrottledOutputStream`/`ThrottledInputStream` envolviendo los streams reales del socket en
+  `run()`, con pacing tipo token-bucket, límite independiente por dirección.
+- **Retraso duerme *antes* de tomar `writeLock`** (no dentro) — un retraso real de red no bloquea
+  paquetes ajenos; si el `Thread.sleep` quedara dentro del lock, el hilo del heartbeat se
+  congelaría junto con el envío que se está retrasando, un artefacto de simulación que no
+  corresponde a nada real. **Duplicación sí queda dentro del lock** (las dos copias deben salir
+  sin nada intercalado, para que sea fiel a "el mismo frame llegó dos veces"). **Throttling se
+  queda donde ya está** (dentro de `writeLock`, porque el propio `write()` del stream throttleado
+  es lo que tarda) — ahí sí es realista que un envío concurrente espere su turno.
+
+### Clases nuevas (paquete `spei`)
+
+| Clase | Rol |
+|---|---|
+| `RedVariacion.java` | Modelo de una variación (tipo + estado + parámetros), mismo patrón que `LoadCampaign.java`: constructor privado + factories estáticas por tipo, dos enums ortogonales (`Tipo`: RETRASO/CORTE/DUPLICACION/THROTTLING; `Estado`: ACTIVA/DETENIDA/TERMINADA/VENCIDA), `finish()` idempotente, `status()` → `LinkedHashMap`. |
+| `RedVariacionRegistry.java` | El lock de "una sola variación a la vez" — reemplaza el contenedor Docker `spei-fault-lock` que usaba el skill puente. `AtomicReference` + auto-vencimiento por `ScheduledExecutorService`. Construido una vez en `Main`, pasado a `SpeiServer`→`SpeiSession` y a `ControlServer`. Expone `capacidades()` para `GET /capacidades`. |
+| `RedVariacionControl.java` | Una instancia por `SpeiSession`. Contador de ocurrencias por punto (`Map<String,Integer>`) + `beforeWrite(String punto) -> Decision`. `Decision` es inmutable (duplicar, cortarDespues, detalleCorte) — sin estado compartido mutable que otro hilo pueda leer a destiempo. |
+| `ThrottledOutputStream.java`, `ThrottledInputStream.java` | Envuelven los streams reales del socket en `run()`. Overridean **`write(byte[],off,len)`/`read(byte[],off,len)`** (no las variantes de un solo byte — son las que `DataOutputStream`/`DataInputStream` realmente invocan). `TokenBucket` compartido para el pacing. |
+
+### Puntos nombrados (vocabulario)
+
+Nombre desnudo (para `retraso`/`duplicacion`, semántica "antes de mandar"): `Greeting`,
+`SmLoginReq`, `EnSesion`, `ClvSim`, `MsjCatalogos`, `AreYouAlive`, `FinReenvio`, `AcuseRecibo`,
+`Abonos`. Nombre `post-X` (para `cortarEn`, semántica "después de mandar", como en el ejemplo de
+arriba `post-ClvSim`) — mismo set, prefijado. `Abonos`, `AreYouAlive`, `FinReenvio` y
+`AcuseRecibo` se repiten dentro de una sesión; ahí `ocurrencia` acepta un entero o `"siguiente"`.
+"Abono número K de una campaña" se resuelve *fuera* de esta clase: quien prueba calcula el
+`ocurrencia` absoluto a partir de `LoadCampaign.status().enviados` + K — cero acoplamiento nuevo
+entre `RedVariacionControl` y `LoadCampaign`.
+
+### Config nueva (`SimConfig.java` + `config/simulator.properties.example`)
+
+Mismo patrón de siempre (default en `load()`, override de entorno automático, accessor con
+javadoc citando el spec):
+
+| Key | Default | Uso |
+|---|---|---|
+| `minos.readTimeoutMs` | `6000` | Documenta el timeout real de minos; base del cálculo del límite de retraso. |
+| `spei.heartbeatIntervalMs` | `3000` | Reemplaza el `3, 3, TimeUnit.SECONDS` hardcodeado en `startHeartbeat()`. |
+| `red.variacion.retrasoMaximoMs` | `2500` | `readTimeoutMs − heartbeatIntervalMs − margen(500)` — literal, no calculado en runtime. |
+| `red.variacion.duplicacionProbabilidadMaxima` | `0.5` | Tope de §4. |
+| `red.variacion.duracionSegundosDefault` | `60` | — |
+| `red.variacion.duracionSegundosMaxima` | `900` | 15 min, ninguna variación queda indefinida. |
+
+### HTTP (`ControlServer.java`, mismo patrón que `/abonos/carga*`)
+
+- `GET /capacidades` — `capaA.disponible: true` siempre, con tipos/límites/puntos válidos y la
+  variación activa si hay una; `capaB.disponible: false` (punto de extensión para cuando exista).
+- `POST /red/variacion` — arranca una variación (`tipo`, `quien` obligatorio, params por tipo).
+  `409` si ya hay una activa (mensaje dice quién y desde cuándo). `400` con el límite exacto y de
+  dónde sale si se pide algo fuera de rango. Sin precondición de "sesión viva" — se puede armar un
+  corte para `post-Greeting` antes de que exista sesión.
+- `GET /red/variacion` — estado de la activa, o `{"activa": false}`.
+- `POST /red/variacion/detener` — para manualmente.
+
+### MCP (`mcp-server/index.js`)
+
+4 tools nuevas dentro de `buildServer()`, mismo patrón que las 11 existentes:
+`simulator_capabilities`, `simulator_start_network_variation`, `simulator_network_variation_status`,
+`simulator_stop_network_variation`. Params vía zod, mapeados 1:1 a los campos de `POST /red/variacion`.
+
+### Archivos que cambian
+
+| Archivo | Cambio |
+|---|---|
+| `spei/RedVariacion.java` | Nuevo |
+| `spei/RedVariacionRegistry.java` | Nuevo |
+| `spei/RedVariacionControl.java` | Nuevo |
+| `spei/ThrottledOutputStream.java`, `ThrottledInputStream.java` | Nuevos |
+| `spei/SpeiSession.java` | Construye `RedVariacionControl` + envuelve `in`/`out` en `run()`; una llamada `beforeWrite`/`Decision` en cada uno de los 9 sitios de envío; `startHeartbeat()` lee `config.heartbeatIntervalMs()` |
+| `spei/SpeiServer.java` | Recibe `RedVariacionRegistry`, lo pasa a cada `SpeiSession` |
+| `config/SimConfig.java` | 6 keys/accessors nuevos |
+| `config/simulator.properties.example` | Bloque comentado espejo |
+| `control/ControlServer.java` | Recibe `RedVariacionRegistry`; rutas `/capacidades`, `/red/variacion`, `/red/variacion/detener` |
+| `Main.java` | Construye el `RedVariacionRegistry` compartido, lo conecta a `SpeiServer`/`ControlServer` |
+| `mcp-server/index.js` | 4 tools nuevas |
+| `plugin/skills/spei-network-fault-injection/SKILL.md`, `references/spec-005-scenarios.md` | Reescritos para usar solo MCP |
+
+### Orden de commits y verificación contra minos real
+
+Cada paso se verifica contra minos real (no solo el arnés Python) antes de seguir al siguiente —
+`AGENTS.md` lo pide para cualquier cambio cerca del protocolo, y este toca timing real de sesión:
+
+1. **Config + intervalo de heartbeat leído de config** (sin ningún comportamiento nuevo). Verificar:
+   conectar minos real, confirmar que el heartbeat sigue cada 3s y la sesión sigue viva más allá
+   de la ventana de timeout de siempre.
+2. **Clases nuevas + wiring en `SpeiSession`/`SpeiServer`/`Main`, sin superficie HTTP todavía.**
+   Verificar: con minos real conectado y ninguna variación jamás armada, confirmar cero diferencia
+   de comportamiento (todo `Decision` es no-op, los streams throttleados son transparentes).
+3. **Rutas de `ControlServer`.** Este es el paso que de verdad prueba la funcionalidad contra
+   minos real: (a) `cortarEn: post-ClvSim` — confirmar que minos ve un corte real justo ahí y que
+   `GET /session` muestra `causa: corte-deliberado` (no `error-io` por error de clasificación);
+   (b) un retraso al límite (2500ms) en un punto que se repite — confirmar que NO dispara el
+   timeout de 6s de minos por sí solo; (c) duplicación en un `Abonos` — confirmar que el parser de
+   minos no truena con la trama repetida; (d) throttling a una tasa baja — confirmar que la sesión
+   se degrada pero no se queda colgada permanentemente (un `Thread.sleep` atorado en el envío del
+   heartbeat se vería igual que un bug de cuelgue real).
+4. **Tools MCP.** Verificar que cada una, llamada contra el mismo simulador + minos real, devuelve
+   exactamente lo mismo que su ruta HTTP.
+5. **Reescritura del skill.** Ensayar el flujo completo (proponer→confirmar→ejecutar→observar→
+   limpiar) una vez por cada uno de los 4 tipos contra minos real, incluyendo el camino de
+   conflicto 409 y el de vencimiento automático (no llamar `detener`, confirmar que se autolimpia).
+
+No se considera nada de esto listo para mergear a `main` sin los pasos (a)-(d) del punto 3 hechos
+contra minos real — es exactamente lo que el arnés Python no puede probar (el timeout real de 6s
+de minos y su reacción real a un corte a mitad de handshake).
+
 ## Preguntas abiertas
 
 Ninguna bloqueante. Las dos originales quedan resueltas:
