@@ -57,3 +57,28 @@ catalogos.poblados=false
 # Bajarlo (ej. 200) fuerza que minos parta de verdad sus propios envios hacia el simulador, y que
 # el simulador parta los suyos -- es el mismo valor que EnSesion le declara a minos.
 wire.maxMessageLength=65535
+
+# Spec 005 (capa A) -- variaciones de red simulables desde la API de control. Ninguno de estos
+# valores es secreto (ver AGENTS.md seccion 6).
+
+# Timeout de lectura real que minos fija en su socket SPEI (SpeiSocketServiceImpl,
+# setSoTimeout(6000)) -- solo se usa para calcular red.variacion.retrasoMaximoMs, no cambia
+# ningun comportamiento por si solo.
+minos.readTimeoutMs=6000
+
+# Intervalo real entre AreYouAlive -- reemplaza el 3s que antes estaba hardcodeado en
+# SpeiSession.startHeartbeat().
+spei.heartbeatIntervalMs=3000
+
+# Retraso + jitter maximo combinado que puede pedir una variacion de tipo "retraso". Default =
+# minos.readTimeoutMs - spei.heartbeatIntervalMs - margen(500) = 6000 - 3000 - 500 = 2500.
+red.variacion.retrasoMaximoMs=2500
+
+# Probabilidad maxima (0-1) que puede pedir una variacion de tipo "duplicacion".
+red.variacion.duplicacionProbabilidadMaxima=0.5
+
+# Duracion por defecto (segundos) de una variacion de red si no se especifica.
+red.variacion.duracionSegundosDefault=60
+
+# Duracion maxima (segundos) de una variacion de red -- ninguna queda indefinida.
+red.variacion.duracionSegundosMaxima=900

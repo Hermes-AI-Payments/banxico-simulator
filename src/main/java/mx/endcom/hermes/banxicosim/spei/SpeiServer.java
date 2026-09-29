@@ -26,18 +26,20 @@ public final class SpeiServer implements Runnable {
 	private final PublicKey minosPublicKey;
 	private final SimConfig config;
 	private final H2Store store;
+	private final RedVariacionRegistry redVariacionRegistry;
 	private final ExecutorService pool = Executors.newCachedThreadPool();
 	private final AtomicReference<SpeiSession> lastSession = new AtomicReference<>();
 	private volatile boolean running = true;
 	private ServerSocket serverSocket;
 
 	public SpeiServer(int port, SimulatorIdentity identity, PublicKey minosPublicKey, SimConfig config,
-			H2Store store) {
+			H2Store store, RedVariacionRegistry redVariacionRegistry) {
 		this.port = port;
 		this.identity = identity;
 		this.minosPublicKey = minosPublicKey;
 		this.config = config;
 		this.store = store;
+		this.redVariacionRegistry = redVariacionRegistry;
 	}
 
 	/** Sesión SPEI más reciente (viva o no) — usada por la consola del simulador para disparar
@@ -54,7 +56,8 @@ public final class SpeiServer implements Runnable {
 			logger.info("[SPEI] Escuchando en el puerto {}", port);
 			while (running) {
 				Socket socket = server.accept();
-				SpeiSession session = new SpeiSession(socket, identity, minosPublicKey, config, store);
+				SpeiSession session = new SpeiSession(socket, identity, minosPublicKey, config, store,
+						redVariacionRegistry);
 				lastSession.set(session);
 				pool.submit(session);
 			}

@@ -302,6 +302,41 @@ Ninguna bloqueante. Las dos originales quedan resueltas:
   duración propia; un escenario "sube la latencia después del mensaje 3" se arma encadenando
   solicitudes, o con la capa A dirigida a mensajes concretos (§1).
 
+## Estado de implementación (2026-09-28)
+
+Implementada la Capa A completa (pasos 1-4 de "Orden de commits" arriba): config nueva
+(`minos.readTimeoutMs`, `spei.heartbeatIntervalMs`, los 4 límites de &sect;4), las 5 clases nuevas
+(`RedVariacion`, `RedVariacionRegistry`, `RedVariacionControl`, `ThrottledOutputStream`,
+`ThrottledInputStream`), wiring en `SpeiSession`/`SpeiServer`/`Main` (los 9 puntos nombrados llaman
+`beforeWrite`, los streams del socket quedan envueltos), las rutas HTTP (`GET /capacidades`,
+`GET`/`POST /red/variacion`, `POST /red/variacion/detener`) y las 4 tools MCP
+(`simulator_capabilities`, `simulator_start_network_variation`, `simulator_network_variation_status`,
+`simulator_stop_network_variation`).
+
+**Compilado (`mvn -DskipTests package`, BUILD SUCCESS) y probado por HTTP contra el simulador
+corriendo sin minos** (`/capacidades`, armar/consultar/detener una variación, conflicto 409,
+vencimiento automático a los 5s, validación de los 4 límites, rechazo de `corte` sin prefijo
+`post-`) -- todo se comportó como se esperaba.
+
+**NO probado todavía contra minos real** -- el paso 4 de "Orden de commits" arriba (a-d) sigue
+pendiente: corte real en `post-ClvSim` con `causa: corte-deliberado` en `GET /session`, retraso al
+límite (2500ms) sin disparar el timeout de minos, duplicación de un `Abonos` sin tronar el parser,
+throttling degradando sin colgar la sesión. **No mergear a `main` sin esos cuatro pasos hechos
+contra minos real** (la razón de por qué está en el propio spec, arriba).
+
+La semántica exacta de `ocurrencia` (entero = dispara una vez y termina; `"siguiente"` = dispara
+desde la próxima ocurrencia en adelante mientras la variación siga activa) es una interpretación
+tomada durante la implementación para conciliar el vocabulario del spec con los criterios de
+aceptación -- ver javadoc de `RedVariacion` -- pendiente de confirmar con Miguel Zavala y con
+pruebas reales.
+
+**Pendiente, no empezado:** Capa B completa (script de host evolucionado de `netem.sh`,
+`deploy.sh` con las preguntas de instalación, `scripts/host/pruebas-red.sh`, comunicación API↔host
+por `systemd.path` y carpeta compartida) y la reescritura del skill
+`spei-network-fault-injection` a solo-MCP (&sect;8) -- deliberadamente diferido: instala un script
+con dueño root en el host real (`192.168.1.200`) y requiere acceso a ese host para probarse, a
+diferencia de la Capa A que es código Java en el propio proceso.
+
 ## Criterios de aceptación
 
 - [ ] `GET /capacidades` y `simulator_capabilities` informan correctamente capa A siempre, y capa

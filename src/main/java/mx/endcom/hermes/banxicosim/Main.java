@@ -14,6 +14,7 @@ import mx.endcom.hermes.banxicosim.config.SimConfig;
 import mx.endcom.hermes.banxicosim.control.ControlServer;
 import mx.endcom.hermes.banxicosim.crypto.SimulatorIdentity;
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
+import mx.endcom.hermes.banxicosim.spei.RedVariacionRegistry;
 import mx.endcom.hermes.banxicosim.spei.SpeiServer;
 
 /**
@@ -50,8 +51,10 @@ public final class Main {
 		}
 
 		H2Store store = H2Store.open(config.dbPath());
+		RedVariacionRegistry redVariacionRegistry = new RedVariacionRegistry(config); // spec 005, capa A
 
-		SpeiServer speiServer = new SpeiServer(config.speiPort(), identity, minosPublicKey, config, store);
+		SpeiServer speiServer = new SpeiServer(config.speiPort(), identity, minosPublicKey, config, store,
+				redVariacionRegistry);
 		AraServer araServer = new AraServer(config.araPort(), identity, minosPublicKey,
 				config.minosCertificateNumber(), minosCertificatePem, store);
 
@@ -62,7 +65,8 @@ public final class Main {
 		speiThread.start();
 		araThread.start();
 
-		ControlServer controlServer = new ControlServer(config.controlPort(), speiServer, store);
+		ControlServer controlServer = new ControlServer(config.controlPort(), speiServer, store,
+				redVariacionRegistry, config);
 		controlServer.start();
 
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {

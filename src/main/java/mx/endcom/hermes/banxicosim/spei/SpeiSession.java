@@ -77,6 +77,10 @@ public final class SpeiSession implements Runnable {
 	private final H2Store store;
 	private final long runId;
 	private final OrderFieldValidator validator = new OrderFieldValidator();
+	// Spec 005 (capa A): variaciones de red armadas desde la API de control -- ver
+	// RedVariacionControl.beforeWrite en cada sitio de envío, y el envoltorio de streams en run().
+	private final RedVariacionRegistry redVariacionRegistry;
+	private final RedVariacionControl redVariacion;
 
 	private DataOutputStream out;
 	private byte[] sessionKey;
@@ -111,13 +115,15 @@ public final class SpeiSession implements Runnable {
 	}
 
 	public SpeiSession(Socket socket, SimulatorIdentity identity, PublicKey minosPublicKey, SimConfig config,
-			H2Store store) {
+			H2Store store, RedVariacionRegistry redVariacionRegistry) {
 		this.socket = socket;
 		this.identity = identity;
 		this.minosPublicKey = minosPublicKey;
 		this.config = config;
 		this.store = store;
 		this.runId = store.newRun("SPEI", socket.getRemoteSocketAddress().toString());
+		this.redVariacionRegistry = redVariacionRegistry;
+		this.redVariacion = new RedVariacionControl(redVariacionRegistry);
 	}
 
 	public boolean isAlive() {
@@ -150,8 +156,13 @@ public final class SpeiSession implements Runnable {
 	public void run() {
 		Exception failure = null;
 		try (socket;
-				DataInputStream in = new DataInputStream(socket.getInputStream());
-				DataOutputStream dataOut = new DataOutputStream(socket.getOutputStream())) {
+				// Spec 005 (capa A): envuelve los streams reales del socket para throttling
+				// asimétrico por dirección -- transparente (sin límite vigente) hasta que una
+				// variación de tipo "throttling" cambia la tasa del TokenBucket compartido.
+				DataInputStream in = new DataInputStream(
+						new ThrottledInputStream(socket.getInputStream(), redVariacionRegistry.limiteEntrada()));
+				DataOutputStream dataOut = new DataOutputStream(
+						new ThrottledOutputStream(socket.getOutputStream(), redVariacionRegistry.limiteSalida()))) {
 			this.out = dataOut;
 			logger.info("[SPEI] Conexión entrante de {}", socket.getRemoteSocketAddress());
 
@@ -237,9 +248,7 @@ public final class SpeiSession implements Runnable {
 	}
 
 	private void sendGreeting() throws Exception {
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_GREETING, new byte[0]).writeTo(out);
-		}
+		sendConVariacion("Greeting", Frame.of(SpeiProtocol.OP_GREETING, new byte[0]));
 		store.logEvent(runId, "OUT", "Greeting", SpeiProtocol.OP_GREETING, "enviado", null, null);
 		phase = Phase.GREETING_ENVIADO;
 		logger.info("[SPEI] >> Greeting");
@@ -248,9 +257,7 @@ public final class SpeiSession implements Runnable {
 	// ---- Fase 2 ----
 
 	private void sendSmLoginReq() throws Exception {
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_SMLOGINREQ, new byte[0]).writeTo(out);
-		}
+		sendConVariacion("SmLoginReq", Frame.of(SpeiProtocol.OP_SMLOGINREQ, new byte[0]));
 		store.logEvent(runId, "OUT", "SmLoginReq", SpeiProtocol.OP_SMLOGINREQ, "enviado", null, null);
 		logger.info("[SPEI] >> SmLoginReq");
 	}
@@ -272,9 +279,7 @@ public final class SpeiSession implements Runnable {
 					+ "pero minos NO podrá desencriptar la llave de sesión. Ver README.");
 		}
 		ClvSimCodec.ClvSimBody clvSim = ClvSimCodec.build(minosPublicKey, identity.privateKey());
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_CLVSIM, clvSim.bytes()).writeTo(out);
-		}
+		sendConVariacion("ClvSim", Frame.of(SpeiProtocol.OP_CLVSIM, clvSim.bytes()));
 		store.logEvent(runId, "OUT", "ClvSim", SpeiProtocol.OP_CLVSIM, "enviado", null, clvSim.bytes());
 		logger.info("[SPEI] >> ClvSim (reto RSA de sesión)");
 
@@ -315,9 +320,7 @@ public final class SpeiSession implements Runnable {
 				LocalDate.now(), config.maxMessageLength(), 4096, own, minos,
 				"simulador-hermes-banxico".getBytes(StandardCharsets.ISO_8859_1), 20);
 		byte[] body = WireFraming.withLengthPrefix(payload);
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_ENSESION, body).writeTo(out);
-		}
+		sendConVariacion("EnSesion", Frame.of(SpeiProtocol.OP_ENSESION, body));
 		store.logEvent(runId, "OUT", "EnSesion", SpeiProtocol.OP_ENSESION, "enviado", null, body);
 		operationalDate = LocalDate.now();
 		phase = Phase.EN_SESION_ENVIADO;
@@ -334,9 +337,7 @@ public final class SpeiSession implements Runnable {
 				? MsjCatalogosCodec.buildPopulatedBody(MsjCatalogosCodec.syntheticCatalogs())
 				: MsjCatalogosCodec.buildEmptyBody();
 		byte[] body = WireFraming.buildEncryptedPartitioned(payload, sessionKey, sessionIv);
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_MSJCATALOGOS, body).writeTo(out);
-		}
+		sendConVariacion("MsjCatalogos", Frame.of(SpeiProtocol.OP_MSJCATALOGOS, body));
 		store.logEvent(runId, "OUT", "MsjCatalogos", SpeiProtocol.OP_MSJCATALOGOS, "enviado", null, body);
 		logger.info("[SPEI] >> MsjCatalogos ({})", poblados ? "catálogos poblados, spec 008" : "catálogos vacíos, v1");
 	}
@@ -349,8 +350,8 @@ public final class SpeiSession implements Runnable {
 	 * la manda) y solo *manda* {@code IAmAliveMessage} en respuesta -- el emisor del heartbeat es
 	 * Banxico, así que el simulador tiene que mandarlo proactivamente o minos da por muerta la
 	 * sesión aunque todo lo demás esté bien. Detectado en pruebas reales contra minos (no estaba
-	 * en la spec técnica original ni en el arnés de verificación previo). Cada 3s, bien debajo del
-	 * límite de 6s.
+	 * en la spec técnica original ni en el arnés de verificación previo). Cada
+	 * {@code spei.heartbeatIntervalMs} (spec 005; default 3000ms), bien debajo del límite de 6s.
 	 */
 	private void startHeartbeat() {
 		heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -358,11 +359,10 @@ public final class SpeiSession implements Runnable {
 			t.setDaemon(true);
 			return t;
 		});
+		long intervalMs = config.heartbeatIntervalMs();
 		heartbeat.scheduleAtFixedRate(() -> {
 			try {
-				synchronized (writeLock) {
-					Frame.of(SpeiProtocol.OP_AREYOUALIVE, new byte[0]).writeTo(out);
-				}
+				sendConVariacion("AreYouAlive", Frame.of(SpeiProtocol.OP_AREYOUALIVE, new byte[0]));
 				logger.debug("[SPEI] >> AreYouAlive (heartbeat)");
 			} catch (Exception e) {
 				logger.warn("[SPEI] Heartbeat falló, cerrando la sesión: {}", e.getMessage());
@@ -371,7 +371,7 @@ public final class SpeiSession implements Runnable {
 				// quedarse bloqueada indefinidamente si minos desapareció sin mandar FIN.
 				requestClose(SessionClosure.Cause.HEARTBEAT_FALLO, e.getMessage());
 			}
-		}, 3, 3, TimeUnit.SECONDS);
+		}, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
 	}
 
 	private void stopHeartbeat() {
@@ -446,9 +446,8 @@ public final class SpeiSession implements Runnable {
 
 		byte[] finReenvioPlain = ReenvioCodec.buildFinReenvioBody();
 		byte[] finReenvioCipher = AesCipher.encrypt(finReenvioPlain, sessionKey, sessionIv);
-		synchronized (writeLock) {
-			Frame.of(32, finReenvioCipher).writeTo(out); // FinReenvioMessage.OP = 32 (ver ToSpeiInputMessage)
-		}
+		// FinReenvioMessage.OP = 32 (ver ToSpeiInputMessage)
+		sendConVariacion("FinReenvio", Frame.of(32, finReenvioCipher));
 		store.logEvent(runId, "OUT", "FinReenvio", 32, "enviado", null, finReenvioCipher);
 		logger.info("[SPEI] >> FinReenvio");
 	}
@@ -501,9 +500,7 @@ public final class SpeiSession implements Runnable {
 		byte[] acusePayload = AcuseReciboCodec.buildBody(
 				orden.operationDate(), orden.folioPack(), orden.entityIndex(), orden.entityCode(), status, errors);
 		byte[] acuseBody = WireFraming.withLengthPrefix(acusePayload);
-		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_ACUSERECIBO, acuseBody).writeTo(out);
-		}
+		sendConVariacion("AcuseRecibo", Frame.of(SpeiProtocol.OP_ACUSERECIBO, acuseBody));
 		store.logEvent(runId, "OUT", "AcuseRecibo", SpeiProtocol.OP_ACUSERECIBO,
 				errors.isEmpty() ? "aceptado" : "rechazado", "erroresOrdenes=" + errors.size(), acuseBody);
 		logger.info("[SPEI] >> AcuseRecibo folioPack={} status={} erroresOrdenes={}",
@@ -588,13 +585,57 @@ public final class SpeiSession implements Runnable {
 		// del lado de minos.
 		java.util.List<byte[]> frames = WireFraming.buildEncryptedSignedPartitionedFrames(payload,
 				identity.privateKey(), sessionKey, sessionIv, config.maxMessageLength());
+
+		// Spec 005 (capa A): "Abonos" es el único de los 9 puntos que puede mandarse partido en
+		// varios frames (spec 001) -- beforeWrite se llama una vez por abono lógico, no por
+		// fragmento. Si hay duplicación, se reenvía la secuencia COMPLETA de frames (no un frame
+		// suelto), para que sea fiel a "el mismo abono llegó dos veces" sin desalinear el
+		// reensamblado de minos.
+		RedVariacionControl.Decision decision = redVariacion.beforeWrite("Abonos");
+		if (decision.retrasoMs() > 0) {
+			Thread.sleep(decision.retrasoMs());
+		}
 		synchronized (writeLock) {
 			for (byte[] frameBody : frames) {
 				Frame.of(SpeiProtocol.OP_ABONOS, frameBody).writeTo(out);
 			}
+			if (decision.duplicar()) {
+				for (byte[] frameBody : frames) {
+					Frame.of(SpeiProtocol.OP_ABONOS, frameBody).writeTo(out);
+				}
+			}
+		}
+		if (decision.cortarDespues()) {
+			logger.warn("[SPEI] Corte deliberado (spec 005) tras Abonos: {}", decision.detalleCorte());
+			requestClose(SessionClosure.Cause.CORTE_DELIBERADO, decision.detalleCorte());
 		}
 		store.logEvent(runId, "OUT", "Abonos", SpeiProtocol.OP_ABONOS, logResult, null, frames.get(0));
-		logger.info("[SPEI] >> Abonos ({}{})", logDescription,
-				frames.size() > 1 ? ", partido en " + frames.size() + " frames (spec 001)" : "");
+		logger.info("[SPEI] >> Abonos ({}{}{})", logDescription,
+				frames.size() > 1 ? ", partido en " + frames.size() + " frames (spec 001)" : "",
+				decision.duplicar() ? ", duplicado (spec 005)" : "");
+	}
+
+	/** Envuelve el envío de un frame con la decisión de la variación de red activa (spec 005,
+	 *  capa A): duerme el retraso FUERA de {@code writeLock} (para no bloquear otros envíos
+	 *  concurrentes, p. ej. el heartbeat), manda el frame (y su duplicado, si aplica, DENTRO del
+	 *  lock para que las dos copias salgan sin nada intercalado), y corta la sesión DESPUÉS de
+	 *  soltar el lock si la variación lo pide. Ver spec 005 &sect;"Diseño de implementación de
+	 *  Capa A". {@code sendAbono} no usa este helper porque puede mandar varios frames a la vez
+	 *  (spec 001) -- ver su propio manejo arriba. */
+	private void sendConVariacion(String puntoDesnudo, Frame frame) throws Exception {
+		RedVariacionControl.Decision decision = redVariacion.beforeWrite(puntoDesnudo);
+		if (decision.retrasoMs() > 0) {
+			Thread.sleep(decision.retrasoMs());
+		}
+		synchronized (writeLock) {
+			frame.writeTo(out);
+			if (decision.duplicar()) {
+				frame.writeTo(out);
+			}
+		}
+		if (decision.cortarDespues()) {
+			logger.warn("[SPEI] Corte deliberado (spec 005) tras {}: {}", puntoDesnudo, decision.detalleCorte());
+			requestClose(SessionClosure.Cause.CORTE_DELIBERADO, decision.detalleCorte());
+		}
 	}
 }

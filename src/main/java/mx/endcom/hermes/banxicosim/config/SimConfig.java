@@ -53,6 +53,16 @@ public final class SimConfig {
 		// lo que le manda ni el simulador lo suyo. Bajarlo fuerza partición real de ambos lados --
 		// es el mismo valor que se declara en EnSesion, que minos usa para decidir si fragmenta.
 		defaults.setProperty("wire.maxMessageLength", "65535");
+		// Spec 005 (capa A): timeout de lectura real de minos, base del cálculo de
+		// red.variacion.retrasoMaximoMs -- documenta un hecho externo, no cambia comportamiento.
+		defaults.setProperty("minos.readTimeoutMs", "6000");
+		// Spec 005: reemplaza el 3s hardcodeado en SpeiSession.startHeartbeat().
+		defaults.setProperty("spei.heartbeatIntervalMs", "3000");
+		// Spec 005 &sect;4: minos.readTimeoutMs - spei.heartbeatIntervalMs - margen(500) = 2500.
+		defaults.setProperty("red.variacion.retrasoMaximoMs", "2500");
+		defaults.setProperty("red.variacion.duplicacionProbabilidadMaxima", "0.5");
+		defaults.setProperty("red.variacion.duracionSegundosDefault", "60");
+		defaults.setProperty("red.variacion.duracionSegundosMaxima", "900");
 
 		Properties props = new Properties(defaults);
 		String configPath = System.getProperty("config", "config/simulator.properties");
@@ -147,5 +157,41 @@ public final class SimConfig {
 	 *  parte sus propios envíos -- ver {@code WireFraming.buildEncryptedSignedPartitionedFrames}. */
 	public int maxMessageLength() {
 		return Integer.parseInt(props.getProperty("wire.maxMessageLength"));
+	}
+
+	/** Spec 005: timeout de lectura real que minos fija en su socket SPEI
+	 *  ({@code SpeiSocketServiceImpl.java}, {@code setSoTimeout(6000)}) -- solo se usa para calcular
+	 *  {@link #redVariacionRetrasoMaximoMs()}, no cambia ningún comportamiento por sí solo. */
+	public long minosReadTimeoutMs() {
+		return Long.parseLong(props.getProperty("minos.readTimeoutMs"));
+	}
+
+	/** Spec 005: intervalo real entre {@code AreYouAlive} -- reemplaza el 3s que antes estaba
+	 *  hardcodeado en {@code SpeiSession.startHeartbeat()}. */
+	public long heartbeatIntervalMs() {
+		return Long.parseLong(props.getProperty("spei.heartbeatIntervalMs"));
+	}
+
+	/** Spec 005 &sect;4: retraso + jitter máximo combinado que puede pedir una variación de tipo
+	 *  "retraso" -- {@code minosReadTimeoutMs() - heartbeatIntervalMs() - margen(500)}, literal en
+	 *  config, no calculado en runtime. */
+	public long redVariacionRetrasoMaximoMs() {
+		return Long.parseLong(props.getProperty("red.variacion.retrasoMaximoMs"));
+	}
+
+	/** Spec 005 &sect;4: tope de probabilidad (0-1) para una variación de tipo "duplicacion". */
+	public double redVariacionDuplicacionProbabilidadMaxima() {
+		return Double.parseDouble(props.getProperty("red.variacion.duplicacionProbabilidadMaxima"));
+	}
+
+	/** Spec 005 &sect;4: duración (segundos) que toma una variación de red si no se especifica. */
+	public long redVariacionDuracionSegundosDefault() {
+		return Long.parseLong(props.getProperty("red.variacion.duracionSegundosDefault"));
+	}
+
+	/** Spec 005 &sect;4: duración máxima (segundos) de una variación de red -- ninguna queda
+	 *  indefinida. */
+	public long redVariacionDuracionSegundosMaxima() {
+		return Long.parseLong(props.getProperty("red.variacion.duracionSegundosMaxima"));
 	}
 }

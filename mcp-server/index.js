@@ -166,6 +166,59 @@ function buildServer() {
 		async ({ id }) => toolResult(await callApi("POST", `/abonos/carga/${id}/detener`)),
 	);
 
+	server.tool(
+		"simulator_capabilities",
+		"Qué pruebas de variación de red están disponibles en este despliegue y con qué límites " +
+			"(GET /capacidades, spec 005) -- capa A (aplicación) siempre disponible; capa B (red real, " +
+			"netem) solo si el script del host está instalado. Consúltala antes de proponer cualquier " +
+			"prueba de red.",
+		{},
+		async () => toolResult(await callApi("GET", "/capacidades")),
+	);
+
+	server.tool(
+		"simulator_start_network_variation",
+		"Arma una variación de red (POST /red/variacion, spec 005, capa A) -- una sola a la vez " +
+			"(409 si ya hay una activa). Campos según 'tipo': retraso (punto, ocurrencia, latenciaMs, " +
+			"jitterMs opcional), corte (punto con prefijo 'post-', ej. 'post-ClvSim', ocurrencia), " +
+			"duplicacion (punto, ocurrencia, probabilidad), throttling (bytesPorSegundoOut, " +
+			"bytesPorSegundoIn). 'ocurrencia' es un entero (dispara una sola vez, en esa ocurrencia " +
+			"exacta, y termina la variación) o 'siguiente' (dispara desde la próxima ocurrencia en " +
+			"adelante mientras la variación siga activa -- útil para 'los próximos N'). Consulta " +
+			"simulator_capabilities primero para los puntos y límites vigentes en este despliegue.",
+		{
+			tipo: z.enum(["retraso", "corte", "duplicacion", "throttling"]),
+			quien: z.string().describe("Nombre libre de quien arma la prueba -- aparece en /capacidades mientras esté activa."),
+			duracionSegundos: z.number().int().positive().optional()
+				.describe("Default y máximo vigentes en /capacidades (red.variacion.duracionSegundosDefault/Maxima)."),
+			punto: z.string().optional()
+				.describe("Requerido para retraso/corte/duplicacion. Nombre desnudo (ej. 'Abonos') o, para corte, con prefijo 'post-' (ej. 'post-ClvSim')."),
+			ocurrencia: z.union([z.number().int(), z.literal("siguiente")]).optional()
+				.describe("Requerido para retraso/corte/duplicacion, en puntos que se repiten (Abonos, AreYouAlive, FinReenvio, AcuseRecibo) y en corte."),
+			latenciaMs: z.number().int().nonnegative().optional().describe("Requerido para retraso."),
+			jitterMs: z.number().int().nonnegative().optional().describe("Opcional para retraso, default 0."),
+			probabilidad: z.number().optional().describe("Requerido para duplicacion (0 exclusivo - 0.5, ver /capacidades)."),
+			bytesPorSegundoOut: z.number().int().positive().optional().describe("Requerido para throttling."),
+			bytesPorSegundoIn: z.number().int().positive().optional().describe("Requerido para throttling."),
+		},
+		async (args) => toolResult(await callApi("POST", "/red/variacion", args)),
+	);
+
+	server.tool(
+		"simulator_network_variation_status",
+		"Estado de la variación de red activa, si hay una (GET /red/variacion, spec 005).",
+		{},
+		async () => toolResult(await callApi("GET", "/red/variacion")),
+	);
+
+	server.tool(
+		"simulator_stop_network_variation",
+		"Detiene manualmente la variación de red activa (POST /red/variacion/detener, spec 005). " +
+			"409 si no hay ninguna activa.",
+		{},
+		async () => toolResult(await callApi("POST", "/red/variacion/detener")),
+	);
+
 	return server;
 }
 

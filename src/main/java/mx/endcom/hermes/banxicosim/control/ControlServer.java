@@ -5,6 +5,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -19,8 +20,11 @@ import org.slf4j.LoggerFactory;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import mx.endcom.hermes.banxicosim.config.SimConfig;
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
 import mx.endcom.hermes.banxicosim.spei.LoadCampaign;
+import mx.endcom.hermes.banxicosim.spei.RedVariacion;
+import mx.endcom.hermes.banxicosim.spei.RedVariacionRegistry;
 import mx.endcom.hermes.banxicosim.spei.SessionClosure;
 import mx.endcom.hermes.banxicosim.spei.SpeiServer;
 import mx.endcom.hermes.banxicosim.spei.SpeiSession;
@@ -46,6 +50,11 @@ import mx.endcom.hermes.banxicosim.spei.SpeiSession;
  *       campaña de volumen, sostenida o en rampa hasta falla (spec 012). Ver {@link #loadCampaign}.</li>
  *   <li>{@code GET /test-runs} -- corridas de prueba persistidas en H2 (Fase 6).</li>
  *   <li>{@code GET /test-runs/{id}/events} -- eventos de una corrida.</li>
+ *   <li>{@code GET /capacidades} -- qué pruebas de red están disponibles y con qué límites
+ *       (spec 005, capa A). Ver {@link #capacidades}.</li>
+ *   <li>{@code POST /red/variacion} / {@code GET /red/variacion} /
+ *       {@code POST /red/variacion/detener} -- variaciones de red (retraso, corte, duplicación,
+ *       throttling), una a la vez (spec 005, capa A). Ver {@link #redVariacion}.</li>
  * </ul>
  */
 public final class ControlServer {
@@ -54,6 +63,7 @@ public final class ControlServer {
 	private static final Pattern RUN_EVENTS_PATH = Pattern.compile("^/test-runs/(\\d+)/events/?$");
 	private static final Pattern CAMPAIGN_STOP_PATH = Pattern.compile("^/abonos/carga/([^/]+)/detener/?$");
 	private static final Pattern CAMPAIGN_STATUS_PATH = Pattern.compile("^/abonos/carga/([^/]+)/?$");
+	private static final Pattern RED_VARIACION_DETENER_PATH = Pattern.compile("^/red/variacion/detener/?$");
 
 	private final HttpServer httpServer;
 	private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -61,8 +71,15 @@ public final class ControlServer {
 	// siga arriba (no persistidas en H2 -- son corridas efímeras de prueba, no eventos de protocolo).
 	private final Map<String, LoadCampaign> loadCampaigns = new ConcurrentHashMap<>();
 	private final AtomicLong campaignSequence = new AtomicLong();
+	// Spec 005 (capa A) -- variaciones de red.
+	private final RedVariacionRegistry redVariacionRegistry;
+	private final SimConfig config;
+	private final AtomicLong redVariacionSequence = new AtomicLong();
 
-	public ControlServer(int port, SpeiServer speiServer, H2Store store) throws IOException {
+	public ControlServer(int port, SpeiServer speiServer, H2Store store,
+			RedVariacionRegistry redVariacionRegistry, SimConfig config) throws IOException {
+		this.redVariacionRegistry = redVariacionRegistry;
+		this.config = config;
 		this.httpServer = HttpServer.create(new InetSocketAddress(port), 0);
 		httpServer.createContext("/health", exchange -> dispatch(exchange, this::health));
 		httpServer.createContext("/session", exchange -> dispatch(exchange, ex -> session(ex, speiServer)));
@@ -75,6 +92,8 @@ public final class ControlServer {
 		httpServer.createContext("/heartbeat/detener",
 				exchange -> dispatch(exchange, ex -> stopHeartbeat(ex, speiServer)));
 		httpServer.createContext("/test-runs", exchange -> dispatch(exchange, ex -> testRuns(ex, store)));
+		httpServer.createContext("/capacidades", exchange -> dispatch(exchange, this::capacidades));
+		httpServer.createContext("/red/variacion", exchange -> dispatch(exchange, this::redVariacion));
 		httpServer.setExecutor(executor);
 	}
 
@@ -393,6 +412,205 @@ public final class ControlServer {
 		}
 
 		return Response.of(404, Map.of("error", "ruta-no-encontrada"));
+	}
+
+	// ---- Spec 005 (capa A): variaciones de red ----
+
+	/** {@code GET /capacidades} -- qué puede probarse en este despliegue y con qué límites. */
+	private Response capacidades(HttpExchange exchange) {
+		if (!"GET".equals(exchange.getRequestMethod())) {
+			return Response.methodNotAllowed();
+		}
+		return Response.ok(redVariacionRegistry.capacidades());
+	}
+
+	/** Enruta {@code GET/POST /red/variacion} y {@code POST /red/variacion/detener} -- mismo
+	 *  patrón que {@link #loadCampaign} para varias rutas bajo un solo contexto HTTP. Sin
+	 *  precondición de "sesión viva" (spec &sect;3): se puede armar un corte para
+	 *  {@code post-Greeting} antes de que exista sesión. */
+	private Response redVariacion(HttpExchange exchange) throws IOException {
+		String path = exchange.getRequestURI().getPath();
+		String method = exchange.getRequestMethod();
+
+		if ("POST".equals(method) && RED_VARIACION_DETENER_PATH.matcher(path).matches()) {
+			return detenerRedVariacion();
+		}
+		if (path.equals("/red/variacion") || path.equals("/red/variacion/")) {
+			if ("GET".equals(method)) {
+				return estadoRedVariacion();
+			}
+			if ("POST".equals(method)) {
+				return iniciarRedVariacion(exchange);
+			}
+		}
+		return Response.of(405, Map.of("error", "metodo-o-ruta-no-soportada"));
+	}
+
+	private Response estadoRedVariacion() {
+		return redVariacionRegistry.activa()
+				.<Response>map(v -> Response.ok(Map.of("activa", true, "variacion", v.status())))
+				.orElseGet(() -> Response.ok(Map.of("activa", false)));
+	}
+
+	private Response detenerRedVariacion() {
+		return redVariacionRegistry.detener()
+				.<Response>map(v -> Response.ok(Map.of("status", "detenida", "variacion", v.status())))
+				.orElseGet(() -> Response.of(409, Map.of("error", "no-hay-variacion-activa")));
+	}
+
+	/**
+	 * {@code POST /red/variacion} -- arma una variación de red (spec 005, capa A). Cuerpo esperado
+	 * (comunes): {@code {"tipo": "retraso"|"corte"|"duplicacion"|"throttling", "quien": "...",
+	 * "duracionSegundos": N (opcional)}}, más según {@code tipo}:
+	 * <ul>
+	 *   <li>retraso: {@code "punto", "ocurrencia" (entero|"siguiente"), "latenciaMs", "jitterMs" (opcional)}</li>
+	 *   <li>corte: {@code "punto"} con prefijo {@code "post-"} (ej. {@code "post-ClvSim"}), {@code "ocurrencia"}</li>
+	 *   <li>duplicacion: {@code "punto", "ocurrencia", "probabilidad"}</li>
+	 *   <li>throttling: {@code "bytesPorSegundoOut", "bytesPorSegundoIn"}</li>
+	 * </ul>
+	 * {@code 409} si ya hay una variación activa (mensaje dice quién y desde cuándo); {@code 400}
+	 * con el límite exacto y de dónde sale si algún parámetro está fuera de rango.
+	 */
+	private Response iniciarRedVariacion(HttpExchange exchange) throws IOException {
+		String rawBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		Map<String, Object> request;
+		try {
+			request = JsonReader.readObject(rawBody);
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "json-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		RedVariacion.Tipo tipo = null;
+		if (request.get("tipo") instanceof String s) {
+			try {
+				tipo = RedVariacion.Tipo.valueOf(s.toUpperCase(Locale.ROOT));
+			} catch (IllegalArgumentException ignored) {
+				// tipo queda null, se reporta abajo
+			}
+		}
+		if (tipo == null) {
+			return Response.of(400, Map.of("error", "tipo-invalido",
+					"detalle", "'tipo' debe ser uno de: retraso, corte, duplicacion, throttling."));
+		}
+
+		String quien = request.get("quien") instanceof String s && !s.isBlank() ? s : null;
+		if (quien == null) {
+			return Response.of(400, Map.of("error", "falta-quien", "detalle", "'quien' es obligatorio."));
+		}
+
+		long duracionMaxima = config.redVariacionDuracionSegundosMaxima();
+		long duracion = request.get("duracionSegundos") instanceof Number n
+				? n.longValue() : config.redVariacionDuracionSegundosDefault();
+		if (duracion <= 0 || duracion > duracionMaxima) {
+			return Response.of(400, Map.of("error", "duracion-fuera-de-rango",
+					"detalle", "'duracionSegundos' debe ser mayor a 0 y como máximo " + duracionMaxima
+							+ " (red.variacion.duracionSegundosMaxima)."));
+		}
+
+		String id = "redvar-" + redVariacionSequence.incrementAndGet();
+		RedVariacion nueva;
+		try {
+			nueva = switch (tipo) {
+				case RETRASO -> construirRetraso(request, id, quien, duracion);
+				case CORTE -> construirCorte(request, id, quien, duracion);
+				case DUPLICACION -> construirDuplicacion(request, id, quien, duracion);
+				case THROTTLING -> construirThrottling(request, id, quien, duracion);
+			};
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "parametro-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		return redVariacionRegistry.iniciar(nueva)
+				.<Response>map(v -> Response.ok(Map.of("status", "iniciada", "variacion", v.status())))
+				.orElseGet(() -> {
+					RedVariacion actual = redVariacionRegistry.activa().orElse(null);
+					String detalle = actual == null
+							? "Ya hay una variación activa."
+							: "Ya hay una variación activa: " + actual.tipo() + " armada por '" + actual.quien()
+									+ "' desde " + actual.armadaEn() + ".";
+					return Response.of(409, Map.of("error", "variacion-ya-activa", "detalle", detalle));
+				});
+	}
+
+	private RedVariacion construirRetraso(Map<String, Object> request, String id, String quien, long duracion) {
+		String punto = requiredPunto(request);
+		OcurrenciaSpec ocurrencia = parseOcurrencia(request);
+		long latenciaMs = longField(request, "latenciaMs", true, 0);
+		long jitterMs = longField(request, "jitterMs", false, 0);
+		long retrasoMaximo = config.redVariacionRetrasoMaximoMs();
+		if (latenciaMs < 0 || jitterMs < 0 || latenciaMs + jitterMs > retrasoMaximo) {
+			throw new IllegalArgumentException("'latenciaMs' + 'jitterMs' no puede superar " + retrasoMaximo
+					+ "ms (red.variacion.retrasoMaximoMs, derivado de minos.readTimeoutMs - "
+					+ "spei.heartbeatIntervalMs - margen).");
+		}
+		return RedVariacion.retraso(id, quien, duracion, punto, ocurrencia.exacta(), ocurrencia.siguiente(),
+				latenciaMs, jitterMs);
+	}
+
+	private RedVariacion construirCorte(Map<String, Object> request, String id, String quien, long duracion) {
+		String puntoPost = requiredPunto(request);
+		if (!puntoPost.startsWith("post-")) {
+			throw new IllegalArgumentException("'punto' de un corte debe traer el prefijo 'post-', ej. 'post-ClvSim'.");
+		}
+		OcurrenciaSpec ocurrencia = parseOcurrencia(request);
+		return RedVariacion.corte(id, quien, duracion, puntoPost, ocurrencia.exacta(), ocurrencia.siguiente());
+	}
+
+	private RedVariacion construirDuplicacion(Map<String, Object> request, String id, String quien, long duracion) {
+		String punto = requiredPunto(request);
+		OcurrenciaSpec ocurrencia = parseOcurrencia(request);
+		double max = config.redVariacionDuplicacionProbabilidadMaxima();
+		if (!(request.get("probabilidad") instanceof Number n)) {
+			throw new IllegalArgumentException("'probabilidad' es obligatoria y debe ser numérica (0-" + max + ").");
+		}
+		double probabilidad = n.doubleValue();
+		if (probabilidad <= 0 || probabilidad > max) {
+			throw new IllegalArgumentException("'probabilidad' debe estar entre 0 (exclusivo) y " + max
+					+ " (red.variacion.duplicacionProbabilidadMaxima).");
+		}
+		return RedVariacion.duplicacion(id, quien, duracion, punto, ocurrencia.exacta(), ocurrencia.siguiente(),
+				probabilidad);
+	}
+
+	private RedVariacion construirThrottling(Map<String, Object> request, String id, String quien, long duracion) {
+		long bytesOut = longField(request, "bytesPorSegundoOut", true, 0);
+		long bytesIn = longField(request, "bytesPorSegundoIn", true, 0);
+		if (bytesOut <= 0 || bytesIn <= 0) {
+			throw new IllegalArgumentException("'bytesPorSegundoOut' y 'bytesPorSegundoIn' deben ser mayores a 0.");
+		}
+		return RedVariacion.throttling(id, quien, duracion, bytesOut, bytesIn);
+	}
+
+	private String requiredPunto(Map<String, Object> request) {
+		if (!(request.get("punto") instanceof String s) || s.isBlank()) {
+			throw new IllegalArgumentException("'punto' es obligatorio -- ver /capacidades para los puntos válidos.");
+		}
+		return s;
+	}
+
+	private record OcurrenciaSpec(Integer exacta, boolean siguiente) {
+	}
+
+	private OcurrenciaSpec parseOcurrencia(Map<String, Object> request) {
+		Object raw = request.get("ocurrencia");
+		if (raw instanceof Number n) {
+			return new OcurrenciaSpec(n.intValue(), false);
+		}
+		if (raw instanceof String s && s.equalsIgnoreCase("siguiente")) {
+			return new OcurrenciaSpec(null, true);
+		}
+		throw new IllegalArgumentException("'ocurrencia' es obligatoria: un entero o la cadena 'siguiente'.");
+	}
+
+	private long longField(Map<String, Object> request, String key, boolean required, long fallback) {
+		Object raw = request.get(key);
+		if (raw instanceof Number n) {
+			return n.longValue();
+		}
+		if (required) {
+			throw new IllegalArgumentException("'" + key + "' es obligatorio y debe ser numérico.");
+		}
+		return fallback;
 	}
 
 	// ---- Infraestructura interna del handler ----
