@@ -29,8 +29,11 @@ EXPOSE 6001 6002 8089
 # igual (genera su propia identidad efímera dentro del contenedor) pero se pierde al recrearlo.
 VOLUME ["/app/data", "/app/config"]
 
+# El puerto de la API de control sale de control.port en config/simulator.properties (default 8089); en la
+# 192.168.1.52 es 9092, y con 8089 fijo aqui el contenedor figuraba "unhealthy" aunque estuviera sano (E-9).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-	CMD wget -q -O - http://localhost:8089/health | grep -q '"ok"' || exit 1
+	CMD PORT="$(sed -n 's/^[[:space:]]*control\.port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' /app/config/simulator.properties 2>/dev/null | tail -1)"; \
+	wget -q -O - "http://localhost:${PORT:-8089}/health" | grep -q '"ok"' || exit 1
 
 USER simulador
 ENTRYPOINT ["java", "-jar", "app.jar"]
