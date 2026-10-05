@@ -64,7 +64,7 @@ responde, revisa esto antes que nada:
    comandos dentro de Claude Code:
 
    ```
-   /plugin marketplace add inatento/banxico-simulator
+   /plugin marketplace add Hermes-AI-Payments/banxico-simulator
    /plugin install banxico-simulator@banxico-simulator
    ```
 

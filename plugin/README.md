@@ -15,7 +15,7 @@ Requisito: la computadora conectada a la red interna donde vive el simulador (VP
 Dentro de Claude Code, desde cualquier carpeta:
 
 ```
-/plugin marketplace add inatento/banxico-simulator
+/plugin marketplace add Hermes-AI-Payments/banxico-simulator
 /plugin install banxico-simulator@banxico-simulator
 ```
 
