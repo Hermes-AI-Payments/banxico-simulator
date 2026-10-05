@@ -249,12 +249,35 @@ correspondientes.
 motivo inválido rechazado con 400, `/pagos/saldo` y `/dia/cerrar` devolviendo 409 sin sesión viva)
 -- todo correcto, sin errores en el arranque (esquema H2 nuevo se crea limpio).
 
-**NO probado todavía contra minos real** -- nada de lo que depende de una sesión SPEI viva
-(`OrdenTopoV` real con rechazo forzado/clave duplicada/motivos mapeados, `Cargos` automático y
-manual, `liquidar-lote`, `LiquidacionFinal`) se ha ejercitado contra minos real todavía. Pendiente,
-antes de mergear a `main`: disparar un `OrdenTopoV` real desde minos (`POST
-/minos/radamanto/sendOrdenTopoV`, nunca ejercitado en ninguna sesión hasta ahora) y confirmar los 6
-criterios de aceptación de abajo uno por uno contra minos real, no solo compilado.
+**Actualización 2026-10-05 (más tarde): primer `OrdenTopoV` real exitoso de punta a punta.**
+`POST /minos/radamanto/orden-topo-v` en `minosa` había estado bloqueado todo el día por un bug
+real encontrado junto con Pedro (no de este spec): `minos.certificateNumber` en
+`simulator.properties` traía un placeholder inventado ("0000000002") en vez del número de serie
+X.509 real del certificado propio de minos -- `Spei.getMyDefaultCertificateIndex()` (minos) nunca
+encontraba coincidencia y CUALQUIER `OrdenTopoV` que minos intentara armar truena con
+"Certificate not found". Corregido en `.200` (minosA) y en el simulador local de `.52` (minosC) con
+el serial real (ver commit que corrige `config/simulator.properties.example`). Con eso corregido:
+
+```
+IN  OrdenTopoV 206 recibido folioPack=2 ordenes=1 firmaVerificada=true
+OUT AcuseRecibo 27 aceptado erroresOrdenes=0
+OUT Cargos 24 enviado folio=2 entradas=1 monto=100.00 balance=1000100.00
+```
+
+Saldo confirmado en `GET /pagos/saldo`: `1,000,000.00 → 1,000,100.00`. Primera vez que el ciclo
+completo de este spec (recepción + validación real + `AcuseRecibo` aceptado + `Cargos` automático +
+persistencia de saldo) corre contra minos real, no solo compilado.
+
+**Pendiente, no probado todavía:** los escenarios de RECHAZO contra minos real (motivos 14/15/16/17
+mapeados, rechazo forzado, clave duplicada sobreviviendo una reconexión), el modo `acumulado` de
+`Cargos`, y `LiquidacionFinal` contra `minosa`/`minosC` específicamente (sí se probó ya contra
+minosa antes de este fix, exitosamente -- ver más abajo -- pero no después de corregir el
+certificado, aunque no hay razón para esperar que cambie). También pendiente: Pedro recomendó
+probar el flujo completo HERMES (Core bancario falso → Judeca → Estigia → minosC → este simulador)
+en vez de solo minos aislado -- se intentó (`POST /simulator/hermes-payments/spei-out` en
+`hermes-core-lab-api`, puerto 3000 en `.52`, genera un payload firmado) pero `POST
+/core/enviar/ordenes` en Judeca (puerto 8071) devolvió 401 -- requiere credenciales que no se
+intentaron adivinar. Pendiente de retomar con esas credenciales o con Pedro directamente.
 
 ## Criterios de aceptación
 
@@ -267,16 +290,21 @@ criterios de aceptación de abajo uno por uno contra minos real, no solo compila
 - [ ] Mandar dos órdenes con la misma clave de rastreo en el mismo día operativo rechaza la
       segunda con motivo 30 — **incluso si la sesión se reconectó entre las dos** (prueba real:
       mandar la primera, reiniciar la sesión SPEI, mandar la segunda con la misma clave).
-- [ ] En modo `inmediato` (default), tras un `AcuseRecibo` con órdenes aceptadas se manda
+- [x] En modo `inmediato` (default), tras un `AcuseRecibo` con órdenes aceptadas se manda
       automáticamente un `Cargos` coherente (mismos folios/entidades, monto = suma de las órdenes
       aceptadas, `folio` = el `folioPack` del `OrdenTopoV`), confirmado por el log de minos
       (`processCargosMessage`) y/o `GET /minos/radamanto/getVariables` (`balance` actualizado).
+      **Confirmado 2026-10-05 contra minosa real** — folioPack=2, monto=100.00, balance
+      1,000,000.00 → 1,000,100.00.
 - [ ] En modo `acumulado`, las órdenes aceptadas NO generan `Cargos` hasta
       `POST /pagos/cargos/liquidar-lote`, que manda uno solo con todas las pendientes del día —
       y lo pendiente sobrevive una reconexión de la sesión SPEI antes de liquidarlo.
 - [ ] El saldo (`GET /pagos/saldo`) sobrevive una reconexión de la sesión SPEI dentro del mismo día
       operativo (no se reinicia a los valores por defecto).
-- [ ] `POST /dia/cerrar` dispara `LiquidacionFinal` y se observa en minos el efecto esperado
+- [x] `POST /dia/cerrar` dispara `LiquidacionFinal` y se observa en minos el efecto esperado
       (reconexión de ARA, notificación a Rada) sin que la sesión SPEI se caiga de forma anómala.
+      **Confirmado 2026-10-05 contra minosa real** (antes del fix de certificado, no debería
+      cambiar) — minos reconectó ARA exitosamente y Radamanto respondió "Mensaje de inicio de
+      cambio de dia recibido"; también resolvió un día operativo atorado 3 días (2 oct → 5 oct).
 - [ ] Todo lo anterior compilado y, antes de mergear a `main`, verificado contra minos real
       (misma disciplina que specs 001/005/012 — ver `minos_wire_protocol_verification`).
