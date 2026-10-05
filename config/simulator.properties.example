@@ -40,6 +40,27 @@ own.entityIndex=1
 minos.entityCode=90646
 minos.entityIndex=2
 minos.entityName=MINOS-DEV
+
+# IMPORTANTE (encontrado 2026-10-05, con Pedro): este NO es un numero de protocolo arbitrario
+# tipo "0000000002" -- es el NUMERO DE SERIE X.509 REAL del certificado propio de minos
+# (minos-test-identity/minos_test.cer en el host de minos), codificado byte a byte como
+# ISO-8859-1 (EnSesionCodec.buildBody -> writeCString). Minos compara este valor, tal cual,
+# contra Spei.publicCertificateNumber (que Radamanto le manda como el serial real al
+# configurarlo, ver MinosClient.java:448,461 en el repo mki) -- Spei.getMyDefaultCertificateIndex
+# (Spei.java:151-158) nunca encuentra coincidencia si aqui se pone un numero inventado, y CUALQUIER
+# OrdenTopoV que minos intente armar truena con "Certificate not found". Por eso antes esto traia
+# "0000000002" -- es un placeholder que NUNCA funciono para enviar ordenes desde minos, solo paso
+# desapercibido porque nada lo habia ejercitado hasta hoy.
+#
+# Para derivarlo correctamente, de la maquina donde vive el certificado de minos:
+#   openssl x509 -in minos_test.cer -noout -serial
+#   # ej. serial=43D874C2E9E2B42291627DA911086C1D6623B16F
+# y luego convertir esos bytes a escapes \uXXXX de Java properties (cada byte = su codepoint
+# Latin-1, uno por uno) -- un one-liner en Python:
+#   python3 -c "print(''.join(f'\\\\u{b:04X}' for b in bytes.fromhex('<serial-hex>')))"
+# Si minos regenera su identidad (como ya nos paso a nosotros con la nuestra, ver
+# identity.certificateNumber arriba), este valor hay que recalcularlo y volver a desplegar --
+# no hay forma de que el simulador lo descubra solo, minos no lo reporta por ningun canal.
 minos.certificateNumber=0000000002
 
 # Ruta del archivo de base de datos H2 (persistencia de corridas de prueba, Fase 6).
