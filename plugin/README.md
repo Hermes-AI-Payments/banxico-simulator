@@ -33,7 +33,9 @@ export BANXICO_SIM_MCP_URL=http://<host>:8090/mcp
 ## Qué se puede pedir
 
 En español normal, por ejemplo: "¿Hay una sesión activa con el banco ahora mismo?", "Manda un pago
-de prueba usando el simulador", "Simula que la red va lenta mientras mandas un pago de prueba".
+de prueba usando el simulador", "Simula que la red va lenta mientras mandas un pago de prueba",
+"Fuerza el rechazo del próximo pago con motivo cuenta inexistente", "¿Cuál es el saldo del día
+operativo?", "Cierra el día operativo".
 
 ## Permisos
 
@@ -42,8 +44,11 @@ está activo. Mandar abonos o aplicar variaciones de red siempre pasa por la con
 Claude Code. Nombres de herramienta para un allowlist propio:
 `mcp__plugin_banxico-simulator_simulador__<herramienta>`.
 
-## Limitación actual de las pruebas de red
+## Pruebas de red: dos capas
 
-Hasta que se implemente el diseño de spec 005 (variaciones de red expuestas por la API), el skill
-aplica las variaciones con `scripts/netem.sh` por SSH contra el host del simulador — ese paso sí
-requiere acceso SSH al host. El resto (estado, abonos, historial) funciona solo con el plugin.
+Cuatro de las siete variaciones de spec 005 (latencia/jitter, duplicación, corte abrupto en un
+punto nombrado, throttling) ya están implementadas como API de aplicación (capa A) y funcionan
+solo con el plugin, sin SSH. Las otras tres (pérdida de paquetes real, reordenamiento, fragmentación
+MTU) siguen sin construirse en código: para esas, el skill recurre a `scripts/netem.sh` por SSH
+contra el host del simulador — ese paso sí requiere acceso SSH. El resto (estado, abonos, historial,
+rechazo forzado, saldo, cierre de día) funciona solo con el plugin.

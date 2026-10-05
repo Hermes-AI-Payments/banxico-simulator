@@ -1,27 +1,43 @@
 ---
 name: spei-network-fault-injection
-description: Diseña y ejecuta pruebas de fault injection de RED (latencia, jitter, pérdida de paquetes, reordenamiento, duplicación, corte abrupto de conexión en un punto del protocolo, throttling asimétrico, fragmentación MTU) contra el contenedor real del simulador SPEI (banxico-simulator), implementando lo que spec 005 dejó sin construir en código -- vía tc netem/ss a nivel de infraestructura, sin tocar el código Java del simulador. Úsalo siempre que el usuario mencione "spec 005", "variaciones de red", "simular latencia/jitter/pérdida de paquetes contra el simulador", "cortar la conexión de minos", "probar el timeout de minos", o pida automatizar/diseñar pruebas de red repetibles para banxico-simulator -- incluso si no menciona explícitamente "netem" o "tc". NO uses este skill para variaciones de contenido de abono (tipo de pago, firma corrupta, folio duplicado) ni campañas de carga/volumen (spec 012) -- esos son otro alcance, fuera de este skill.
-allowed-tools: mcp__plugin_banxico-simulator_simulador__simulator_health, mcp__plugin_banxico-simulator_simulador__simulator_session, mcp__plugin_banxico-simulator_simulador__simulator_list_test_runs, mcp__plugin_banxico-simulator_simulador__simulator_test_run_events
+description: Diseña y ejecuta pruebas de fault injection de RED (latencia, jitter, pérdida de paquetes, reordenamiento, duplicación, corte abrupto de conexión en un punto del protocolo, throttling asimétrico, fragmentación MTU) contra el contenedor real del simulador SPEI (banxico-simulator). Para latencia/jitter, duplicación, corte abrupto en un punto nombrado y throttling, el simulador ya expone esto como API (spec 005 capa A, vía MCP, sin SSH) -- este skill lo usa cuando aplica y solo recurre a tc netem/ss a nivel de infraestructura (capa B) para lo que la API no cubre (pérdida de paquetes real, reordenamiento, fragmentación MTU) o cuando el usuario pide explícitamente fidelidad de red real en vez de la simulación de capa A. Úsalo siempre que el usuario mencione "spec 005", "variaciones de red", "simular latencia/jitter/pérdida de paquetes contra el simulador", "cortar la conexión de minos", "probar el timeout de minos", o pida automatizar/diseñar pruebas de red repetibles para banxico-simulator -- incluso si no menciona explícitamente "netem" o "tc". NO uses este skill para variaciones de contenido de abono (tipo de pago, firma corrupta, folio duplicado), campañas de carga/volumen (spec 012), ni recepción/rechazo/liquidación de pagos (spec 014) -- esos son otro alcance, fuera de este skill.
+allowed-tools: mcp__plugin_banxico-simulator_simulador__simulator_health, mcp__plugin_banxico-simulator_simulador__simulator_session, mcp__plugin_banxico-simulator_simulador__simulator_list_test_runs, mcp__plugin_banxico-simulator_simulador__simulator_test_run_events, mcp__plugin_banxico-simulator_simulador__simulator_capabilities, mcp__plugin_banxico-simulator_simulador__simulator_start_network_variation, mcp__plugin_banxico-simulator_simulador__simulator_network_variation_status, mcp__plugin_banxico-simulator_simulador__simulator_stop_network_variation
 ---
 
 # SPEI network fault injection (spec 005)
 
 ## Por qué existe este skill
 
-`specs/005-variaciones-de-red.md` describe siete variaciones de red que se
-querían poder simular contra el simulador SPEI, pero **nunca se implementaron
-en el código del simulador** -- no hay ningún endpoint ni decorator para esto,
-confirmado contra el código fuente. La spec proponía construirlo como una capa
-de aplicación dentro de `SpeiSession`/`AraSession`. Este skill logra el mismo
-objetivo *sin escribir ni una línea de código Java*, aplicando fault injection
-real a nivel de red (kernel Linux, `tc netem`) contra el contenedor Docker que
-ya corre el simulador. Es más fiel que un decorator simulado -- es pérdida de
-paquetes y latencia reales, no una aproximación en software de aplicación.
+`specs/005-variaciones-de-red.md` describe siete variaciones de red. **Cuatro
+de las siete ya están implementadas como API de aplicación** (capa A: retraso,
+corte, duplicación, throttling -- `POST /red/variacion`, expuesto por este
+mismo plugin como `simulator_start_network_variation`/`simulator_capabilities`/
+etc.) y no requieren SSH ni tocar el contenedor directamente. **Las otras tres
+(pérdida de paquetes real, reordenamiento, fragmentación MTU) siguen sin
+construirse en código** -- para esas, y para quien pida explícitamente
+fidelidad de red real en vez de la simulación de capa A, este skill logra el
+mismo objetivo *sin escribir ni una línea de código Java*, aplicando fault
+injection real a nivel de red (kernel Linux, `tc netem`) contra el contenedor
+Docker que ya corre el simulador (capa B). Es más fiel que capa A -- es
+pérdida de paquetes y latencia reales, no una aproximación en software de
+aplicación -- pero necesita SSH al host y es más disruptivo (degrada *toda* la
+salida del contenedor, no solo el escenario que pediste).
+
+**Antes de diseñar cualquier plan, decide capa A o capa B** (ver tabla en
+`references/spec-005-scenarios.md`): si el escenario es latencia/jitter,
+duplicación, corte abrupto en punto nombrado, o throttling, y el usuario no
+pidió explícitamente netem/fidelidad real, prefiere capa A -- es más simple,
+no requiere SSH, y no degrada tráfico que no sea parte del escenario. Dilo en
+el plan ("uso capa A vía API, no netem, porque es más simple y no toca nada
+más") para que quien lee el plan sepa qué mecanismo se aplicó. Usa capa B
+(el resto de este skill) para pérdida de paquetes, reordenamiento, MTU, o
+cuando el usuario pida explícitamente fidelidad de red real.
 
 El simulador real vive en el host `192.168.1.200`, alcanzable por VPN, en el
 contenedor `banxico-simulator` (nombre fijo, ver `docker-compose.yml`). Esto
 es infraestructura real conectada a un cliente real (minos) -- no un sandbox
-descartable. Trátalo con el mismo cuidado que tocar producción.
+descartable. Trátalo con el mismo cuidado que tocar producción, sea cual sea
+la capa que uses.
 
 ## Regla de autonomía (no negociable)
 
@@ -146,11 +162,13 @@ comando.
 
 ## Notas honestas sobre el enfoque
 
-- Esto **no** implementa spec 005 tal como fue diseñada (decorator de
-  aplicación en Java) -- logra la misma intención por otro mecanismo. Dilo si
-  el usuario compara el resultado contra los criterios de aceptación
-  originales de la spec, para que no asuma que el código del simulador
-  cambió.
+- Para los cuatro escenarios de capa A (retraso, duplicación, corte abrupto,
+  throttling), el código del simulador **sí** cambió -- es la implementación
+  real de spec 005 vía API. Para los otros tres (pérdida de paquetes,
+  reordenamiento, MTU), este skill logra la misma intención por otro mecanismo
+  (netem/kernel, capa B), sin tocar el código Java. Dilo si el usuario compara
+  el resultado contra los criterios de aceptación originales de la spec, para
+  que sepa cuál mecanismo aplicó en cada caso.
 - Un qdisc `root` en `eth0` del contenedor afecta **solo el tráfico que sale
   del simulador** (hacia minos), no el que entra -- para afectar la dirección
   minos→simulador hace falta el procedimiento de ingress con `ifb` (throttling

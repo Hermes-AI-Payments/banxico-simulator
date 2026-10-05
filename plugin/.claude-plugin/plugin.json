@@ -1,8 +1,8 @@
 {
   "name": "banxico-simulator",
   "displayName": "Simulador SPEI (Banxico falso)",
-  "version": "0.2.0",
-  "description": "Prueba minos contra el simulador SPEI en lenguaje natural: estado de sesión, abonos de prueba, historial de corridas y pruebas de variaciones de red. Se conecta al MCP que corre junto a la API del simulador — no requiere clonar el repo.",
+  "version": "0.3.0",
+  "description": "Prueba minos contra el simulador SPEI en lenguaje natural: estado de sesión, abonos de prueba, historial de corridas, variaciones de red (capa A vía API, sin SSH), y recepción/rechazo/liquidación de pagos (rechazo forzado, Cargos, saldo, cierre de día). Se conecta al MCP que corre junto a la API del simulador — no requiere clonar el repo.",
   "author": { "name": "Miguel Zavala" },
   "repository": "https://github.com/Hermes-AI-Payments/banxico-simulator",
   "keywords": ["spei", "banxico", "minos", "hermes", "pruebas", "mcp"]
