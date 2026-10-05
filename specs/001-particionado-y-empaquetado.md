@@ -119,6 +119,14 @@ hardcodeado a `abonosV=1`). Es un cambio de menor riesgo (el wire ya soporta N, 
 real llega a 2 por mensaje según el log de certificación analizado) pero no se hizo todavía para
 no alargar más este cambio.
 
+**Actualización 2026-09-29 (spec 012):** un abono aislado sigue confirmado funcionando contra
+minos real, pero se encontró que minos responde `AcuseParteCas` (código 198 — "mensaje
+particionado incompleto") después de `MsjCatalogos` y `FinReenvio` en cada handshake, y que
+mandar `Abonos` en ráfaga rápida (300/min) eventualmente tumba la sesión. No parece ser un bug de
+la aritmética de `WireFraming` de este repo (autochequeo confirmado consistente) — hipótesis de
+trabajo: un `temporalPart` compartido entre tipos de mensaje del lado de minos. Detalle completo
+y evidencia en `specs/012-pruebas-de-volumen.md` §"Hallazgo 2026-09-29".
+
 ## Criterios de aceptación
 
 - [ ] Disparar una corrida con 5 transacciones B→H en modo "uno por paquete" produce 5 frames

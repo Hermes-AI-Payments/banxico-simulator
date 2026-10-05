@@ -36,6 +36,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [011](011-mcp.md) | Integración MCP sobre la API de control; MCP junto a la API y plugin | En progreso (falta desplegar) |
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
 | [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado (falta confirmar en host) |
+| [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Implementado y compilado, probado por HTTP sin minos; falta verificar contra minos real (2026-10-05) |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las
 tres specs asumían poder extender **no existe en el repo** (`AGENTS.md` lo describe como

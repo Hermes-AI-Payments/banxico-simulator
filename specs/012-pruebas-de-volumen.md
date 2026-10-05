@@ -80,6 +80,76 @@ códigos HTTP correctos sin excepciones no manejadas.
 verificar con minos real conectado. Sigue pendiente: coordinar con Pedro antes de correr el modo
 rampa contra "minosa" (ver "Preguntas abiertas").
 
+## Hallazgo 2026-09-29 — primera prueba real contra minosa, bloqueante
+
+Primera vez que se corrió una campaña sostenida (300/min, 60s) contra `minosa` real (conectada por
+el toolkit `hermes-instalador`, Flujo D). **No fue exitosa**: minos cerró la sesión SPEI
+(`causa: minos-cerro`) después de solo 4 abonos enviados en <1 segundo; los 296 envíos restantes
+fallaron con `IllegalStateException` porque ya no había sesión viva (bug de diseño aparte:
+`LoadCampaign` en modo SOSTENIDA no detecta sesión muerta y sigue reintentando los 60s completos en
+vez de terminar temprano como sí hace RAMPA en su primera falla -- pendiente de corregir).
+
+**Diagnóstico, con evidencia (no especulación):**
+- Justo antes de que minos cerrara, respondió `AcuseParteCas` (código 198 -- ver
+  `AcuseParteCasMessage.java`, minos) después de cada uno de los 4 `Abonos`. Ese mensaje lo manda
+  `SpeiInputListener.sendAcuseParteCas()` (minos) únicamente cuando `isComplete()` de un mensaje
+  particionado da `false` -- o sea, minos considera cada uno de nuestros `Abonos` un mensaje
+  incompleto, esperando más partes que nunca llegan.
+- **No es un bug de aritmética de nuestro lado**: se añadió un auto-chequeo temporal (revertido tras
+  usarlo) que decodifica el frame ya cifrado con nuestra propia llave de sesión y compara el
+  `totalSize` declarado contra el tamaño real -- coincidieron exactamente (`878 == 878`) en la
+  prueba de un solo abono.
+- **No es exclusivo de `Abonos`**: el mismo `198` apareció justo después de `MsjCatalogos` y de
+  `FinReenvio` durante el handshake normal, antes de mandar ningún abono -- probablemente pasa en
+  **cada** sesión desde siempre y nunca se había notado, porque el simulador no depende de esa
+  respuesta para declarar la sesión viva (la ignora silenciosamente, ver el `default` de
+  `SpeiSession.mainLoop`).
+- **Un solo abono, aislado, no rompió la sesión** (se probó por separado: `POST /abonos/validos`,
+  `GET /session` siguió `alive:true` después). Solo la ráfaga rápida (4 en <1s) la tumbó.
+- Se descartó la hipótesis de `Minos.dmzActive` (perfil `dmz` de Spring, que salta el descifrado)
+  -- `minosa` corre con `SPRING_PROFILES_ACTIVE="prod,postgresql"`, sin `dmz`.
+- **Hipótesis de trabajo, sin confirmar:** `SpeiInputListener` (minos) guarda un solo
+  `temporalPart` compartido entre TODOS los tipos de mensaje partitioned, no por tipo/sesión de
+  mensaje. Si minos ya considera "incompleto" un mensaje anterior (`MsjCatalogos`/`FinReenvio`) y
+  llega un `Abonos` antes de que eso se resuelva, `addPart()` podría estar concatenando bytes de
+  mensajes no relacionados sobre un buffer viejo -- con envíos espaciados esto no alcanza a
+  acumularse lo suficiente para tronar; a 300/min sí.
+
+**Por qué esto es más grande que spec 012:** el `198` tras `MsjCatalogos`/`FinReenvio` implica que
+esto probablemente afecta a **toda sesión**, no solo a campañas de volumen -- specs 001/002/004/006
+(que también mandan `Abonos` reales) nunca confirmaron un envío contra minos real (ver sus propios
+"Estado de implementación": los tres dicen "no probado todavía"), así que es posible que este
+comportamiento sea la razón. Necesita involucrar a alguien con contexto real de `minos`
+(Pedro) antes de seguir -- es su código, no el del simulador.
+
+### Confirmación 2026-09-29 (mismo día): 300 abonos espaciados a 1/seg, sin ninguna falla
+
+Se mandaron 300 `Abonos` reales, uno por uno vía `POST /abonos/validos` (no por `LoadCampaign`),
+espaciados 1 segundo entre cada uno -- misma sesión SPEI viva de principio a fin (`runId` y
+`vivaDesde` sin cambio), **cero fallas**.
+
+**Dato clave que descarta la hipótesis de "acumulación de basura hasta tronar":** los logs
+confirman `AcuseParteCas` (198) después de **cada uno** de los 300 abonos (301 respuestas 198 para
+301 `Abonos` enviados, contando el de la prueba unitaria anterior) -- o sea, minos SIEMPRE
+considera el `Abonos` "incompleto", sin excepción, incluso en los que sí terminaron en sesión sana.
+Si fuera acumulación de bytes de mensajes distintos sobre un `temporalPart` compartido, 300
+repeticiones espaciadas deberían haber acumulado la misma "basura" que 4 repeticiones rápidas --
+y no pasó nada.
+
+**Hipótesis revisada:** el problema no es cuántos `Abonos` "incompletos" se acumulan, sino qué tan
+rápido llegan. Apunta a una condición de carrera del lado de minos bajo ráfaga (algo async que no
+alcanza a resolverse entre un frame y el siguiente cuando llegan a <1s de diferencia -- consistente
+con la nota ya existente en este mismo repo sobre que minos procesa cosas de forma asíncrona, ver
+javadoc de `SpeiSession.performClvSim`), no una simple cuenta de mensajes sin resolver.
+
+**Techo real:** entre 1/seg (60/min, sano) y 5/seg (300/min, tumba la sesión en el intento 4) hay
+un rango sin explorar. No se acotó más porque implica seguir generando tráfico real contra el
+ambiente compartido de Pedro -- pendiente de su input antes de seguir buscando el límite exacto.
+
+**No se seguirá con las pruebas de spec 005 (capa A) hasta resolver esto** -- decisión de Miguel,
+2026-09-29: la condición original (campaña de volumen exitosa a 300/min) sigue sin cumplirse,
+aunque ahora sabemos que el volumen SÍ es alcanzable a un ritmo más conservador.
+
 ## Criterios de aceptación
 
 - [ ] Se puede lanzar una campaña sostenida a una tasa objetivo (ej. 500/min) por una duración

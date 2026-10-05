@@ -2,9 +2,12 @@ package mx.endcom.hermes.banxicosim.control;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,11 +26,15 @@ import com.sun.net.httpserver.HttpServer;
 import mx.endcom.hermes.banxicosim.config.SimConfig;
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
 import mx.endcom.hermes.banxicosim.spei.LoadCampaign;
+import mx.endcom.hermes.banxicosim.spei.RechazoForzado;
+import mx.endcom.hermes.banxicosim.spei.RechazoForzadoRegistry;
 import mx.endcom.hermes.banxicosim.spei.RedVariacion;
 import mx.endcom.hermes.banxicosim.spei.RedVariacionRegistry;
 import mx.endcom.hermes.banxicosim.spei.SessionClosure;
 import mx.endcom.hermes.banxicosim.spei.SpeiServer;
 import mx.endcom.hermes.banxicosim.spei.SpeiSession;
+import mx.endcom.hermes.banxicosim.spei.messages.CargosCodec;
+import mx.endcom.hermes.banxicosim.validation.MotivoRechazo;
 
 /**
  * API de control HTTP del simulador. No es parte del protocolo SPEI/ARA (minos no le habla a
@@ -55,6 +62,14 @@ import mx.endcom.hermes.banxicosim.spei.SpeiSession;
  *   <li>{@code POST /red/variacion} / {@code GET /red/variacion} /
  *       {@code POST /red/variacion/detener} -- variaciones de red (retraso, corte, duplicación,
  *       throttling), una a la vez (spec 005, capa A). Ver {@link #redVariacion}.</li>
+ *   <li>{@code POST /pagos/rechazo-forzado} / {@code GET .../} / {@code POST .../cancelar} --
+ *       rechazo forzado de la próxima orden de un {@code OrdenTopoV} (spec 014). Ver
+ *       {@link #rechazoForzado}.</li>
+ *   <li>{@code POST /pagos/cargos} / {@code GET .../pendientes} / {@code POST .../liquidar-lote}
+ *       -- {@code Cargos} manual, consulta de lo acumulado, y flush del lote (spec 014, modo
+ *       {@code acumulado}). Ver {@link #pagosCargos}.</li>
+ *   <li>{@code GET /pagos/saldo} -- saldo del día operativo vigente (spec 014).</li>
+ *   <li>{@code POST /dia/cerrar} -- {@code LiquidacionFinal}, cierre de día operativo (spec 014).</li>
  * </ul>
  */
 public final class ControlServer {
@@ -64,6 +79,9 @@ public final class ControlServer {
 	private static final Pattern CAMPAIGN_STOP_PATH = Pattern.compile("^/abonos/carga/([^/]+)/detener/?$");
 	private static final Pattern CAMPAIGN_STATUS_PATH = Pattern.compile("^/abonos/carga/([^/]+)/?$");
 	private static final Pattern RED_VARIACION_DETENER_PATH = Pattern.compile("^/red/variacion/detener/?$");
+	private static final Pattern RECHAZO_FORZADO_CANCELAR_PATH = Pattern.compile("^/pagos/rechazo-forzado/cancelar/?$");
+	private static final Pattern CARGOS_PENDIENTES_PATH = Pattern.compile("^/pagos/cargos/pendientes/?$");
+	private static final Pattern CARGOS_LIQUIDAR_LOTE_PATH = Pattern.compile("^/pagos/cargos/liquidar-lote/?$");
 
 	private final HttpServer httpServer;
 	private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -75,10 +93,17 @@ public final class ControlServer {
 	private final RedVariacionRegistry redVariacionRegistry;
 	private final SimConfig config;
 	private final AtomicLong redVariacionSequence = new AtomicLong();
+	// Spec 014 -- recepción y liquidación de pagos.
+	private final RechazoForzadoRegistry rechazoForzadoRegistry;
+	private final H2Store store;
+	private final AtomicLong rechazoForzadoSequence = new AtomicLong();
 
 	public ControlServer(int port, SpeiServer speiServer, H2Store store,
-			RedVariacionRegistry redVariacionRegistry, SimConfig config) throws IOException {
+			RedVariacionRegistry redVariacionRegistry, RechazoForzadoRegistry rechazoForzadoRegistry,
+			SimConfig config) throws IOException {
 		this.redVariacionRegistry = redVariacionRegistry;
+		this.rechazoForzadoRegistry = rechazoForzadoRegistry;
+		this.store = store;
 		this.config = config;
 		this.httpServer = HttpServer.create(new InetSocketAddress(port), 0);
 		httpServer.createContext("/health", exchange -> dispatch(exchange, this::health));
@@ -94,6 +119,10 @@ public final class ControlServer {
 		httpServer.createContext("/test-runs", exchange -> dispatch(exchange, ex -> testRuns(ex, store)));
 		httpServer.createContext("/capacidades", exchange -> dispatch(exchange, this::capacidades));
 		httpServer.createContext("/red/variacion", exchange -> dispatch(exchange, this::redVariacion));
+		httpServer.createContext("/pagos/rechazo-forzado", exchange -> dispatch(exchange, this::rechazoForzado));
+		httpServer.createContext("/pagos/cargos", exchange -> dispatch(exchange, ex -> pagosCargos(ex, speiServer)));
+		httpServer.createContext("/pagos/saldo", exchange -> dispatch(exchange, ex -> saldo(ex, speiServer)));
+		httpServer.createContext("/dia/cerrar", exchange -> dispatch(exchange, ex -> cerrarDia(ex, speiServer)));
 		httpServer.setExecutor(executor);
 	}
 
@@ -611,6 +640,266 @@ public final class ControlServer {
 			throw new IllegalArgumentException("'" + key + "' es obligatorio y debe ser numérico.");
 		}
 		return fallback;
+	}
+
+	// ---- Spec 014: recepción y liquidación de pagos ----
+
+	/** Enruta {@code GET/POST /pagos/rechazo-forzado} y {@code POST .../cancelar} -- mismo patrón
+	 *  que {@link #redVariacion}. */
+	private Response rechazoForzado(HttpExchange exchange) throws IOException {
+		String path = exchange.getRequestURI().getPath();
+		String method = exchange.getRequestMethod();
+
+		if ("POST".equals(method) && RECHAZO_FORZADO_CANCELAR_PATH.matcher(path).matches()) {
+			return cancelarRechazoForzado();
+		}
+		if (path.equals("/pagos/rechazo-forzado") || path.equals("/pagos/rechazo-forzado/")) {
+			if ("GET".equals(method)) {
+				return estadoRechazoForzado();
+			}
+			if ("POST".equals(method)) {
+				return iniciarRechazoForzado(exchange);
+			}
+		}
+		return Response.of(405, Map.of("error", "metodo-o-ruta-no-soportada"));
+	}
+
+	private Response estadoRechazoForzado() {
+		return rechazoForzadoRegistry.activo()
+				.<Response>map(r -> Response.ok(Map.of("activo", true, "rechazo", r.status())))
+				.orElseGet(() -> Response.ok(Map.of("activo", false)));
+	}
+
+	private Response cancelarRechazoForzado() {
+		return rechazoForzadoRegistry.detener()
+				.<Response>map(r -> Response.ok(Map.of("status", "cancelado", "rechazo", r.status())))
+				.orElseGet(() -> Response.of(409, Map.of("error", "no-hay-rechazo-activo")));
+	}
+
+	/**
+	 * {@code POST /pagos/rechazo-forzado} -- requisito explícito de la spec funcional de la
+	 * iniciativa (forzar un rechazo a propósito para probar cómo reacciona minos). Cuerpo:
+	 * {@code {"motivo": N, "quien": "...", "trackingKey": "opcional"}} -- {@code motivo} es
+	 * obligatorio (1-30, ver catálogo de devoluciones); sin {@code trackingKey}, cubre la
+	 * próxima orden de cualquier clave.
+	 */
+	private Response iniciarRechazoForzado(HttpExchange exchange) throws IOException {
+		String rawBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		Map<String, Object> request;
+		try {
+			request = JsonReader.readObject(rawBody);
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "json-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		if (!(request.get("motivo") instanceof Number n)) {
+			return Response.of(400, Map.of("error", "falta-motivo",
+					"detalle", "'motivo' es obligatorio y debe ser numérico (1-30, ver catálogo de devoluciones)."));
+		}
+		MotivoRechazo motivo;
+		try {
+			motivo = MotivoRechazo.porCodigo(n.intValue());
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "motivo-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		String quien = request.get("quien") instanceof String s && !s.isBlank() ? s : null;
+		if (quien == null) {
+			return Response.of(400, Map.of("error", "falta-quien", "detalle", "'quien' es obligatorio."));
+		}
+		String trackingKey = request.get("trackingKey") instanceof String s && !s.isBlank() ? s : null;
+
+		String id = "rechazo-" + rechazoForzadoSequence.incrementAndGet();
+		RechazoForzado nuevo = new RechazoForzado(id, quien, motivo, trackingKey);
+		return rechazoForzadoRegistry.iniciar(nuevo)
+				.<Response>map(r -> Response.ok(Map.of("status", "armado", "rechazo", r.status())))
+				.orElseGet(() -> {
+					RechazoForzado actual = rechazoForzadoRegistry.activo().orElse(null);
+					String detalle = actual == null
+							? "Ya hay un rechazo forzado activo."
+							: "Ya hay un rechazo forzado activo: armado por '" + actual.quien()
+									+ "' desde " + actual.armadaEn() + ".";
+					return Response.of(409, Map.of("error", "rechazo-ya-activo", "detalle", detalle));
+				});
+	}
+
+	/** Enruta {@code POST /pagos/cargos} (manual), {@code GET .../pendientes} y
+	 *  {@code POST .../liquidar-lote} -- mismo patrón que {@link #loadCampaign}. */
+	private Response pagosCargos(HttpExchange exchange, SpeiServer speiServer) throws Exception {
+		String path = exchange.getRequestURI().getPath();
+		String method = exchange.getRequestMethod();
+
+		if ("GET".equals(method) && CARGOS_PENDIENTES_PATH.matcher(path).matches()) {
+			return cargosPendientes(speiServer);
+		}
+		if ("POST".equals(method) && CARGOS_LIQUIDAR_LOTE_PATH.matcher(path).matches()) {
+			return liquidarLoteCargos(speiServer);
+		}
+		if ((path.equals("/pagos/cargos") || path.equals("/pagos/cargos/")) && "POST".equals(method)) {
+			return triggerCargosManual(exchange, speiServer);
+		}
+		return Response.of(405, Map.of("error", "metodo-o-ruta-no-soportada"));
+	}
+
+	private Response cargosPendientes(SpeiServer speiServer) {
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of(
+					"error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero (ver README)."));
+		}
+		var pendientes = store.listarCargosPendientes(session.operationalDate()).stream().map(p -> {
+			Map<String, Object> m = new LinkedHashMap<>();
+			m.put("id", p.id());
+			m.put("entityIndex", p.entityIndex());
+			m.put("entityCode", p.entityCode());
+			m.put("instructionFolio", p.instructionFolio());
+			m.put("internalFolio", p.internalFolio());
+			m.put("amount", p.amount());
+			return (Object) m;
+		}).toList();
+		return Response.ok(Map.of("pendientes", pendientes));
+	}
+
+	/** {@code POST /pagos/cargos/liquidar-lote} -- manda un solo {@code Cargos} con todo lo
+	 *  acumulado del día operativo vigente (modo {@code acumulado}, spec 014 &sect;4); el
+	 *  {@code folio} del mensaje consolidado es el {@code folioPack} más reciente entre las
+	 *  entradas (decisión de implementación, no documentada en ningún lado -- ver specs/014). */
+	private Response liquidarLoteCargos(SpeiServer speiServer) throws Exception {
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of(
+					"error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero (ver README)."));
+		}
+		var pendientes = store.listarCargosPendientes(session.operationalDate());
+		if (pendientes.isEmpty()) {
+			return Response.of(409, Map.of("error", "no-hay-cargos-pendientes"));
+		}
+		List<CargosCodec.CargoEntry> entries = new ArrayList<>();
+		BigDecimal total = BigDecimal.ZERO;
+		int folio = 0;
+		for (var p : pendientes) {
+			entries.add(new CargosCodec.CargoEntry(p.entityIndex(), p.entityCode(), p.instructionFolio(),
+					(short) p.internalFolio()));
+			total = total.add(p.amount());
+			folio = Math.max(folio, p.instructionFolio());
+		}
+		session.sendCargos(folio, entries, total);
+		store.limpiarCargosPendientes(session.operationalDate());
+		return Response.ok(Map.of("status", "liquidado", "folio", folio, "entradas", entries.size(), "monto", total));
+	}
+
+	/**
+	 * {@code POST /pagos/cargos} -- {@code Cargos} manual arbitrario, no ligado a una orden real
+	 * (spec 014 &sect;4) -- útil para probar escenarios de saldo sin depender de un
+	 * {@code OrdenTopoV}. Cuerpo: {@code {"folio": N, "entradas": [{"entityIndex": N,
+	 * "entityCode": N, "instructionFolio": N, "internalFolio": N, "monto": N}, ...]}}.
+	 */
+	private Response triggerCargosManual(HttpExchange exchange, SpeiServer speiServer) throws IOException {
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of(
+					"error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero (ver README)."));
+		}
+		String rawBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		Map<String, Object> request;
+		try {
+			request = JsonReader.readObject(rawBody);
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "json-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		Object entradasRaw = request.get("entradas");
+		if (!(entradasRaw instanceof List<?> lista) || lista.isEmpty()) {
+			return Response.of(400, Map.of("error", "faltan-entradas",
+					"detalle", "'entradas' es obligatorio: lista de {entityIndex, entityCode, instructionFolio, internalFolio, monto}."));
+		}
+
+		List<CargosCodec.CargoEntry> entries = new ArrayList<>();
+		BigDecimal total = BigDecimal.ZERO;
+		int folio;
+		try {
+			folio = intField(request, "folio", true, 0);
+			for (Object o : lista) {
+				if (!(o instanceof Map<?, ?> rawEntrada)) {
+					return Response.of(400, Map.of("error", "entrada-invalida", "detalle", "Cada entrada debe ser un objeto."));
+				}
+				@SuppressWarnings("unchecked")
+				Map<String, Object> entrada = (Map<String, Object>) rawEntrada;
+				int entityIndex = intField(entrada, "entityIndex", true, 0);
+				int entityCode = intField(entrada, "entityCode", true, 0);
+				int instructionFolio = intField(entrada, "instructionFolio", true, 0);
+				int internalFolio = intField(entrada, "internalFolio", true, 0);
+				if (!(entrada.get("monto") instanceof Number montoRaw)) {
+					return Response.of(400, Map.of("error", "falta-monto", "detalle", "cada entrada requiere 'monto' numérico."));
+				}
+				entries.add(new CargosCodec.CargoEntry(entityIndex, entityCode, instructionFolio, (short) internalFolio));
+				total = total.add(new BigDecimal(montoRaw.toString()));
+			}
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "parametro-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+
+		try {
+			session.sendCargos(folio, entries, total);
+		} catch (Exception e) {
+			logger.error("[Control] Error mandando Cargos manual: {}", e.getMessage(), e);
+			return Response.of(500, Map.of("error", "error-interno", "detalle", String.valueOf(e.getMessage())));
+		}
+		return Response.ok(Map.of("status", "enviado", "folio", folio, "entradas", entries.size(), "monto", total));
+	}
+
+	/** {@code GET /pagos/saldo} -- saldo del día operativo vigente (spec 014 &sect;4). */
+	private Response saldo(HttpExchange exchange, SpeiServer speiServer) {
+		if (!"GET".equals(exchange.getRequestMethod())) {
+			return Response.methodNotAllowed();
+		}
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of(
+					"error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero (ver README)."));
+		}
+		H2Store.SaldoDia saldo = store.saldoDelDia(session.operationalDate(), config.cargosBalanceInicial(),
+				config.cargosReservedBalanceInicial());
+		return Response.ok(Map.of("balance", saldo.balance(), "reservedBalance", saldo.reservedBalance(),
+				"diaOperativo", session.operationalDate().toString()));
+	}
+
+	/** {@code POST /dia/cerrar} -- {@code LiquidacionFinal} (spec 014 &sect;5), solo manual.
+	 *  Cuerpo opcional: {@code {"montoFinal": N}} (default 0). */
+	private Response cerrarDia(HttpExchange exchange, SpeiServer speiServer) throws IOException {
+		if (!"POST".equals(exchange.getRequestMethod())) {
+			return Response.methodNotAllowed();
+		}
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of(
+					"error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero (ver README)."));
+		}
+		String rawBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		BigDecimal montoFinal = BigDecimal.ZERO;
+		if (!rawBody.isBlank()) {
+			Map<String, Object> request;
+			try {
+				request = JsonReader.readObject(rawBody);
+			} catch (IllegalArgumentException e) {
+				return Response.of(400, Map.of("error", "json-invalido", "detalle", String.valueOf(e.getMessage())));
+			}
+			if (request.get("montoFinal") instanceof Number n) {
+				montoFinal = new BigDecimal(n.toString());
+			}
+		}
+		try {
+			session.sendLiquidacionFinal(montoFinal);
+		} catch (Exception e) {
+			logger.error("[Control] Error mandando LiquidacionFinal: {}", e.getMessage(), e);
+			return Response.of(500, Map.of("error", "error-interno", "detalle", String.valueOf(e.getMessage())));
+		}
+		return Response.ok(Map.of("status", "enviado", "montoFinal", montoFinal));
 	}
 
 	// ---- Infraestructura interna del handler ----

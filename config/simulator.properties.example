@@ -82,3 +82,14 @@ red.variacion.duracionSegundosDefault=60
 
 # Duracion maxima (segundos) de una variacion de red -- ninguna queda indefinida.
 red.variacion.duracionSegundosMaxima=900
+
+# Spec 014 -- recepcion y liquidacion de pagos.
+
+# Modo de disparo de Cargos: "inmediato" (1:1 por cada OrdenTopoV con ordenes aceptadas, default)
+# o "acumulado" (se junta hasta POST /pagos/cargos/liquidar-lote).
+cargos.modoLiquidacion=inmediato
+
+# Saldo inicial de un dia operativo nuevo. Minos no valida este valor contra nada, solo lo
+# almacena (Spei.balance / Spei.reservedBalance) y lo reporta a Caina.
+cargos.balanceInicial=1000000.00
+cargos.reservedBalanceInicial=0.00

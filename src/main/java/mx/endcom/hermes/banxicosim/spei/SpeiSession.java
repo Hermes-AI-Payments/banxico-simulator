@@ -23,11 +23,14 @@ import mx.endcom.hermes.banxicosim.crypto.SimulatorIdentity;
 import mx.endcom.hermes.banxicosim.persistence.H2Store;
 import mx.endcom.hermes.banxicosim.spei.messages.AbonosCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.AcuseReciboCodec;
+import mx.endcom.hermes.banxicosim.spei.messages.CargosCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.ClvSimCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.EnSesionCodec;
+import mx.endcom.hermes.banxicosim.spei.messages.LiquidacionFinalCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.MsjCatalogosCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.OrdenTopoVCodec;
 import mx.endcom.hermes.banxicosim.spei.messages.ReenvioCodec;
+import mx.endcom.hermes.banxicosim.validation.MotivoRechazo;
 import mx.endcom.hermes.banxicosim.validation.OrderFieldValidator;
 import mx.endcom.hermes.banxicosim.wire.ByteReader;
 import mx.endcom.hermes.banxicosim.crypto.AesCipher;
@@ -81,6 +84,8 @@ public final class SpeiSession implements Runnable {
 	// RedVariacionControl.beforeWrite en cada sitio de envío, y el envoltorio de streams en run().
 	private final RedVariacionRegistry redVariacionRegistry;
 	private final RedVariacionControl redVariacion;
+	// Spec 014: rechazo forzado de una orden de OrdenTopoV -- ver RechazoForzadoRegistry.
+	private final RechazoForzadoRegistry rechazoForzadoRegistry;
 
 	private DataOutputStream out;
 	private byte[] sessionKey;
@@ -115,7 +120,7 @@ public final class SpeiSession implements Runnable {
 	}
 
 	public SpeiSession(Socket socket, SimulatorIdentity identity, PublicKey minosPublicKey, SimConfig config,
-			H2Store store, RedVariacionRegistry redVariacionRegistry) {
+			H2Store store, RedVariacionRegistry redVariacionRegistry, RechazoForzadoRegistry rechazoForzadoRegistry) {
 		this.socket = socket;
 		this.identity = identity;
 		this.minosPublicKey = minosPublicKey;
@@ -124,6 +129,7 @@ public final class SpeiSession implements Runnable {
 		this.runId = store.newRun("SPEI", socket.getRemoteSocketAddress().toString());
 		this.redVariacionRegistry = redVariacionRegistry;
 		this.redVariacion = new RedVariacionControl(redVariacionRegistry);
+		this.rechazoForzadoRegistry = rechazoForzadoRegistry;
 	}
 
 	public boolean isAlive() {
@@ -479,8 +485,34 @@ public final class SpeiSession implements Runnable {
 		logger.info("[SPEI] << OrdenTopoV folioPack={}, {} orden(es), firma verificada={}",
 				orden.folioPack(), orden.orders().size(), unwrapped.signatureVerified());
 
+		// Spec 014 -- precedencia entre los tres chequeos de una misma orden: rechazo forzado
+		// primero (intención deliberada de quien prueba), clave duplicada segundo (regla real de
+		// Banxico, más barata que correr el validador completo), validación real al final.
 		List<AcuseReciboCodec.OrderError> errors = new ArrayList<>();
+		List<CargosCodec.CargoEntry> aceptadasInmediato = new ArrayList<>();
+		BigDecimal montoAceptadoInmediato = BigDecimal.ZERO;
+		String modoLiquidacion = config.cargosModoLiquidacion();
 		for (OrdenTopoVCodec.Order order : orden.orders()) {
+			RechazoForzado forzado = rechazoForzadoRegistry.activo()
+					.filter(r -> r.coincideCon(order.trackingKey()))
+					.orElse(null);
+			if (forzado != null) {
+				rechazoForzadoRegistry.consumir(forzado, "folioInterno=" + order.internalFolio()
+						+ " claveRastreo=" + order.trackingKey());
+				logger.warn("[SPEI]   orden folioInterno={} tipoPg={} claveRastreo={}: RECHAZADA (forzado por '{}', motivo={})",
+						order.internalFolio(), order.paymentType(), order.trackingKey(), forzado.quien(), forzado.motivo().codigo());
+				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(), (char) forzado.motivo().codigo()));
+				continue;
+			}
+			boolean claveDuplicada = !order.trackingKey().isBlank()
+					&& store.claveYaVista(orden.operationDate(), order.trackingKey());
+			if (claveDuplicada) {
+				logger.warn("[SPEI]   orden folioInterno={} tipoPg={} claveRastreo={}: RECHAZADA (clave de rastreo repetida)",
+						order.internalFolio(), order.paymentType(), order.trackingKey());
+				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(),
+						(char) MotivoRechazo.CLAVE_RASTREO_REPETIDA.codigo()));
+				continue;
+			}
 			OrderFieldValidator.OrderContext ctx = new OrderFieldValidator.OrderContext(
 					order.paymentType(), order.trackingKey(), order.amount(),
 					orden.entityCode(), orden.receptorEntityCode());
@@ -489,10 +521,23 @@ public final class SpeiSession implements Runnable {
 			if (validationErrors.isEmpty()) {
 				logger.info("[SPEI]   orden folioInterno={} tipoPg={} claveRastreo={}: ACEPTADA",
 						order.internalFolio(), order.paymentType(), order.trackingKey());
+				store.marcarClaveVista(orden.operationDate(), order.trackingKey());
+				// Spec 014 &sect;4 -- liquidación (Cargos): en modo acumulado solo se persiste en
+				// H2 (POST /pagos/cargos/liquidar-lote decide cuándo mandarlo); en modo inmediato
+				// (default) se junta aquí mismo y se manda un Cargos al terminar este OrdenTopoV.
+				if ("acumulado".equalsIgnoreCase(modoLiquidacion)) {
+					store.agregarCargoPendiente(orden.operationDate(), orden.entityIndex(), orden.entityCode(),
+							orden.folioPack(), order.internalFolio(), order.amount());
+				} else {
+					aceptadasInmediato.add(new CargosCodec.CargoEntry(
+							orden.entityIndex(), orden.entityCode(), orden.folioPack(), order.internalFolio()));
+					montoAceptadoInmediato = montoAceptadoInmediato.add(order.amount());
+				}
 			} else {
-				logger.warn("[SPEI]   orden folioInterno={} tipoPg={} claveRastreo={}: RECHAZADA -> {}",
-						order.internalFolio(), order.paymentType(), order.trackingKey(), validationErrors);
-				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(), (char) 1));
+				MotivoRechazo motivo = MotivoRechazo.clasificar(validationErrors.get(0));
+				logger.warn("[SPEI]   orden folioInterno={} tipoPg={} claveRastreo={}: RECHAZADA (motivo={}) -> {}",
+						order.internalFolio(), order.paymentType(), order.trackingKey(), motivo.codigo(), validationErrors);
+				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(), (char) motivo.codigo()));
 			}
 		}
 
@@ -505,6 +550,63 @@ public final class SpeiSession implements Runnable {
 				errors.isEmpty() ? "aceptado" : "rechazado", "erroresOrdenes=" + errors.size(), acuseBody);
 		logger.info("[SPEI] >> AcuseRecibo folioPack={} status={} erroresOrdenes={}",
 				orden.folioPack(), (int) status, errors.size());
+
+		if (!aceptadasInmediato.isEmpty()) {
+			sendCargos(orden.folioPack(), aceptadasInmediato, montoAceptadoInmediato);
+		}
+	}
+
+	/**
+	 * Spec 014 &sect;4 -- manda {@code Cargos} con las entradas dadas y actualiza el saldo del día
+	 * operativo (persistido en H2 -- sobrevive una reconexión de la sesión SPEI, ver
+	 * {@code H2Store.saldoDelDia}). Público porque también lo dispara la API de control
+	 * directamente (modo manual, y el flush de {@code POST /pagos/cargos/liquidar-lote} en modo
+	 * acumulado), no solo el disparo automático de {@link #handleOrdenTopoV} en modo inmediato.
+	 */
+	public void sendCargos(int folio, List<CargosCodec.CargoEntry> entries, BigDecimal montoTotal) throws Exception {
+		if (!alive) {
+			throw new IllegalStateException("No hay sesión SPEI viva todavía, no se puede mandar Cargos");
+		}
+		H2Store.SaldoDia saldoActual = store.saldoDelDia(operationalDate, config.cargosBalanceInicial(),
+				config.cargosReservedBalanceInicial());
+		BigDecimal nuevoBalance = saldoActual.balance().add(montoTotal);
+		store.actualizarSaldo(operationalDate, nuevoBalance, saldoActual.reservedBalance());
+
+		byte[] payload = CargosCodec.buildPayload(operationalDate, folio, entries, montoTotal,
+				nuevoBalance, saldoActual.reservedBalance());
+		List<byte[]> frames = WireFraming.buildEncryptedSignedPartitionedFrames(payload,
+				identity.privateKey(), sessionKey, sessionIv, config.maxMessageLength());
+		synchronized (writeLock) {
+			for (byte[] frameBody : frames) {
+				Frame.of(SpeiProtocol.OP_CARGOS, frameBody).writeTo(out);
+			}
+		}
+		store.logEvent(runId, "OUT", "Cargos", SpeiProtocol.OP_CARGOS, "enviado",
+				"folio=" + folio + " entradas=" + entries.size() + " monto=" + montoTotal
+						+ " balance=" + nuevoBalance,
+				frames.get(0));
+		logger.info("[SPEI] >> Cargos folio={} entradas={} monto={} balance={}",
+				folio, entries.size(), montoTotal, nuevoBalance);
+	}
+
+	/** Spec 014 &sect;5 -- cierre de día operativo. Solo disparable manualmente
+	 *  ({@code POST /dia/cerrar}) -- no tiene sentido simular un cron de las 18:00 dentro de una
+	 *  herramienta de pruebas bajo demanda. {@code folio} no tiene semántica documentada en
+	 *  ningún lado para este mensaje (a diferencia de {@code Abonos}/{@code Cargos}, donde sí se
+	 *  ata al {@code folioPack} de origen) -- se manda {@code 0}. */
+	public void sendLiquidacionFinal(BigDecimal montoFinal) throws Exception {
+		if (!alive) {
+			throw new IllegalStateException("No hay sesión SPEI viva todavía, no se puede mandar LiquidacionFinal");
+		}
+		byte[] payload = LiquidacionFinalCodec.buildPayload(operationalDate, 0,
+				config.ownEntityIndex(), config.ownEntityCode(), montoFinal);
+		byte[] body = WireFraming.encryptSession(payload, sessionKey, sessionIv);
+		synchronized (writeLock) {
+			Frame.of(SpeiProtocol.OP_LIQUIDACIONFINAL, body).writeTo(out);
+		}
+		store.logEvent(runId, "OUT", "LiquidacionFinal", SpeiProtocol.OP_LIQUIDACIONFINAL, "enviado",
+				"montoFinal=" + montoFinal, body);
+		logger.info("[SPEI] >> LiquidacionFinal montoFinal={}", montoFinal);
 	}
 
 	// ---- Fase 5: envío manual de abonos (disparado desde Main vía consola) ----

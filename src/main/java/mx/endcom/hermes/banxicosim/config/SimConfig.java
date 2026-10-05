@@ -63,6 +63,11 @@ public final class SimConfig {
 		defaults.setProperty("red.variacion.duplicacionProbabilidadMaxima", "0.5");
 		defaults.setProperty("red.variacion.duracionSegundosDefault", "60");
 		defaults.setProperty("red.variacion.duracionSegundosMaxima", "900");
+		// Spec 014: modo de disparo de Cargos -- "inmediato" (1:1 por OrdenTopoV aceptado) o
+		// "acumulado" (se junta hasta POST /pagos/cargos/liquidar-lote).
+		defaults.setProperty("cargos.modoLiquidacion", "inmediato");
+		defaults.setProperty("cargos.balanceInicial", "1000000.00");
+		defaults.setProperty("cargos.reservedBalanceInicial", "0.00");
 
 		Properties props = new Properties(defaults);
 		String configPath = System.getProperty("config", "config/simulator.properties");
@@ -193,5 +198,21 @@ public final class SimConfig {
 	 *  indefinida. */
 	public long redVariacionDuracionSegundosMaxima() {
 		return Long.parseLong(props.getProperty("red.variacion.duracionSegundosMaxima"));
+	}
+
+	/** Spec 014 &sect;4: {@code "inmediato"} (default) o {@code "acumulado"} -- ver
+	 *  {@code ControlServer} y {@code SpeiSession} para cómo cambia el disparo de {@code Cargos}. */
+	public String cargosModoLiquidacion() {
+		return props.getProperty("cargos.modoLiquidacion");
+	}
+
+	/** Spec 014 &sect;4: saldo inicial de un día operativo nuevo (fila nueva en la tabla H2
+	 *  {@code dia_operativo}) -- minos no valida este valor contra nada, solo lo almacena. */
+	public java.math.BigDecimal cargosBalanceInicial() {
+		return new java.math.BigDecimal(props.getProperty("cargos.balanceInicial"));
+	}
+
+	public java.math.BigDecimal cargosReservedBalanceInicial() {
+		return new java.math.BigDecimal(props.getProperty("cargos.reservedBalanceInicial"));
 	}
 }

@@ -1,12 +1,15 @@
 package mx.endcom.hermes.banxicosim.persistence;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -75,6 +78,34 @@ public final class H2Store implements AutoCloseable {
 						raw_hex CLOB
 					)
 					""");
+			// Spec 014 -- estado del día operativo que debe sobrevivir una reconexión de la sesión
+			// SPEI (motivo de rechazo 30 y saldo de Cargos tienen el mismo problema, ver specs/014
+			// &sect;3/&sect;4: un solo mecanismo en H2 para los dos, no dos soluciones distintas).
+			st.execute("""
+					CREATE TABLE IF NOT EXISTS clave_rastreo_vista (
+						operation_date DATE NOT NULL,
+						tracking_key VARCHAR(30) NOT NULL,
+						PRIMARY KEY (operation_date, tracking_key)
+					)
+					""");
+			st.execute("""
+					CREATE TABLE IF NOT EXISTS dia_operativo (
+						operation_date DATE PRIMARY KEY,
+						balance DECIMAL(18,2) NOT NULL,
+						reserved_balance DECIMAL(18,2) NOT NULL
+					)
+					""");
+			st.execute("""
+					CREATE TABLE IF NOT EXISTS cargo_pendiente (
+						id IDENTITY PRIMARY KEY,
+						operation_date DATE NOT NULL,
+						entity_index INT NOT NULL,
+						entity_code INT NOT NULL,
+						instruction_folio INT NOT NULL,
+						internal_folio INT NOT NULL,
+						amount DECIMAL(18,2) NOT NULL
+					)
+					""");
 		}
 	}
 
@@ -138,6 +169,139 @@ public final class H2Store implements AutoCloseable {
 			ps.executeUpdate();
 		} catch (SQLException e) {
 			logger.warn("No fue posible registrar el evento de prueba {}: {}", messageName, e.getMessage());
+		}
+	}
+
+	// ---- Spec 014: estado del día operativo (clave de rastreo vista, saldo, cargos pendientes) ----
+
+	/** {@code true} si esa clave de rastreo ya se vio ese día operativo (motivo de rechazo 30,
+	 *  specs/014 &sect;3) -- persistida en H2, no en memoria de la sesión, para que sobreviva una
+	 *  reconexión. */
+	public boolean claveYaVista(LocalDate operationDate, String trackingKey) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"SELECT 1 FROM clave_rastreo_vista WHERE operation_date = ? AND tracking_key = ?")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			ps.setString(2, trackingKey);
+			try (ResultSet rs = ps.executeQuery()) {
+				return rs.next();
+			}
+		} catch (SQLException e) {
+			logger.warn("No fue posible consultar clave de rastreo vista: {}", e.getMessage());
+			return false; // igual que judeca real: nunca bloquear una orden por un fallo de la propia validación
+		}
+	}
+
+	/** Marca una clave como vista -- solo se llama para órdenes ACEPTADAS (una orden rechazada por
+	 *  otro motivo no "reserva" su clave, specs/014 &sect;3). */
+	public void marcarClaveVista(LocalDate operationDate, String trackingKey) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"INSERT INTO clave_rastreo_vista (operation_date, tracking_key) VALUES (?, ?)")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			ps.setString(2, trackingKey);
+			ps.executeUpdate();
+		} catch (SQLException e) {
+			logger.warn("No fue posible marcar la clave de rastreo {} como vista: {}", trackingKey, e.getMessage());
+		}
+	}
+
+	/** Saldo del día operativo (tabla {@code dia_operativo}), specs/014 &sect;4. */
+	public record SaldoDia(BigDecimal balance, BigDecimal reservedBalance) {
+	}
+
+	/** Lee el saldo vigente de {@code operationDate}; si es la primera vez que se pide ese día,
+	 *  crea la fila con los valores iniciales dados y los devuelve. */
+	public SaldoDia saldoDelDia(LocalDate operationDate, BigDecimal balanceInicial, BigDecimal reservedBalanceInicial) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"SELECT balance, reserved_balance FROM dia_operativo WHERE operation_date = ?")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			try (ResultSet rs = ps.executeQuery()) {
+				if (rs.next()) {
+					return new SaldoDia(rs.getBigDecimal("balance"), rs.getBigDecimal("reserved_balance"));
+				}
+			}
+		} catch (SQLException e) {
+			logger.warn("No fue posible leer el saldo del día {}: {}", operationDate, e.getMessage());
+			return new SaldoDia(balanceInicial, reservedBalanceInicial);
+		}
+		try (PreparedStatement ps = connection.prepareStatement(
+				"INSERT INTO dia_operativo (operation_date, balance, reserved_balance) VALUES (?, ?, ?)")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			ps.setBigDecimal(2, balanceInicial);
+			ps.setBigDecimal(3, reservedBalanceInicial);
+			ps.executeUpdate();
+		} catch (SQLException e) {
+			logger.warn("No fue posible crear el saldo del día {}: {}", operationDate, e.getMessage());
+		}
+		return new SaldoDia(balanceInicial, reservedBalanceInicial);
+	}
+
+	/** Actualiza el saldo de un día operativo ya existente (se llama siempre después de
+	 *  {@link #saldoDelDia}, que garantiza que la fila ya existe). */
+	public void actualizarSaldo(LocalDate operationDate, BigDecimal nuevoBalance, BigDecimal nuevoReservedBalance) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"UPDATE dia_operativo SET balance = ?, reserved_balance = ? WHERE operation_date = ?")) {
+			ps.setBigDecimal(1, nuevoBalance);
+			ps.setBigDecimal(2, nuevoReservedBalance);
+			ps.setDate(3, Date.valueOf(operationDate));
+			ps.executeUpdate();
+		} catch (SQLException e) {
+			logger.warn("No fue posible actualizar el saldo del día {}: {}", operationDate, e.getMessage());
+		}
+	}
+
+	/** Una orden aceptada en espera de liquidarse (modo {@code acumulado}, specs/014 &sect;4). */
+	public record CargoPendiente(long id, int entityIndex, int entityCode, int instructionFolio, int internalFolio,
+			BigDecimal amount) {
+	}
+
+	public void agregarCargoPendiente(LocalDate operationDate, int entityIndex, int entityCode,
+			int instructionFolio, short internalFolio, BigDecimal amount) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"""
+				INSERT INTO cargo_pendiente
+					(operation_date, entity_index, entity_code, instruction_folio, internal_folio, amount)
+				VALUES (?, ?, ?, ?, ?, ?)
+				""")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			ps.setInt(2, entityIndex);
+			ps.setInt(3, entityCode);
+			ps.setInt(4, instructionFolio);
+			ps.setInt(5, internalFolio);
+			ps.setBigDecimal(6, amount);
+			ps.executeUpdate();
+		} catch (SQLException e) {
+			logger.warn("No fue posible acumular el cargo pendiente: {}", e.getMessage());
+		}
+	}
+
+	public List<CargoPendiente> listarCargosPendientes(LocalDate operationDate) {
+		List<CargoPendiente> pendientes = new ArrayList<>();
+		try (PreparedStatement ps = connection.prepareStatement(
+				"""
+				SELECT id, entity_index, entity_code, instruction_folio, internal_folio, amount
+				FROM cargo_pendiente WHERE operation_date = ? ORDER BY id ASC
+				""")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					pendientes.add(new CargoPendiente(rs.getLong("id"), rs.getInt("entity_index"),
+							rs.getInt("entity_code"), rs.getInt("instruction_folio"), rs.getInt("internal_folio"),
+							rs.getBigDecimal("amount")));
+				}
+			}
+		} catch (SQLException e) {
+			logger.warn("No fue posible listar los cargos pendientes del día {}: {}", operationDate, e.getMessage());
+		}
+		return pendientes;
+	}
+
+	public void limpiarCargosPendientes(LocalDate operationDate) {
+		try (PreparedStatement ps = connection.prepareStatement(
+				"DELETE FROM cargo_pendiente WHERE operation_date = ?")) {
+			ps.setDate(1, Date.valueOf(operationDate));
+			ps.executeUpdate();
+		} catch (SQLException e) {
+			logger.warn("No fue posible limpiar los cargos pendientes del día {}: {}", operationDate, e.getMessage());
 		}
 	}
 

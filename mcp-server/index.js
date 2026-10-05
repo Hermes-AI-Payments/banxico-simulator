@@ -219,6 +219,86 @@ function buildServer() {
 		async () => toolResult(await callApi("POST", "/red/variacion/detener")),
 	);
 
+	server.tool(
+		"simulator_force_payment_rejection",
+		"Fuerza el rechazo de la próxima orden de un OrdenTopoV (POST /pagos/rechazo-forzado, spec " +
+			"014) -- requisito explícito de la spec funcional de la iniciativa: probar cómo reacciona " +
+			"minos a un AcuseRecibo con status RECHAZADA, aunque la orden en sí sea válida. Una sola " +
+			"vez a la vez (409 si ya hay uno armado); se consume en la primera orden que coincida.",
+		{
+			motivo: z.number().int().describe("Código del catálogo de devoluciones (1-30) a reportar, ej. 19 = Carácter inválido, 1 = Cuenta inexistente. Ver GET /pagos/rechazo-forzado para el catálogo completo si se expone, o la documentación del repo."),
+			quien: z.string().describe("Nombre libre de quien arma la prueba."),
+			trackingKey: z.string().optional().describe("Si se omite, cubre la próxima orden de cualquier clave de rastreo; si se da, solo esa orden específica."),
+		},
+		async (args) => toolResult(await callApi("POST", "/pagos/rechazo-forzado", args)),
+	);
+
+	server.tool(
+		"simulator_payment_rejection_status",
+		"Estado del rechazo forzado activo, si hay uno (GET /pagos/rechazo-forzado, spec 014).",
+		{},
+		async () => toolResult(await callApi("GET", "/pagos/rechazo-forzado")),
+	);
+
+	server.tool(
+		"simulator_cancel_forced_rejection",
+		"Cancela el rechazo forzado activo sin esperar a que una orden lo consuma (POST " +
+			"/pagos/rechazo-forzado/cancelar, spec 014). 409 si no hay ninguno activo.",
+		{},
+		async () => toolResult(await callApi("POST", "/pagos/rechazo-forzado/cancelar")),
+	);
+
+	server.tool(
+		"simulator_send_cargos",
+		"Manda un Cargos manual arbitrario (POST /pagos/cargos, spec 014), no ligado a una orden " +
+			"real -- útil para probar escenarios de saldo sin depender de un OrdenTopoV. Requiere una " +
+			"sesión SPEI viva.",
+		{
+			folio: z.number().int().describe("Folio del mensaje Cargos."),
+			entradas: z.array(z.object({
+				entityIndex: z.number().int(),
+				entityCode: z.number().int(),
+				instructionFolio: z.number().int(),
+				internalFolio: z.number().int(),
+				monto: z.number(),
+			})).describe("Una entrada por orden cargada."),
+		},
+		async (args) => toolResult(await callApi("POST", "/pagos/cargos", args)),
+	);
+
+	server.tool(
+		"simulator_pending_cargos",
+		"Lista las órdenes aceptadas en espera de liquidarse (GET /pagos/cargos/pendientes, spec " +
+			"014, modo acumulado) -- vacío si el modo de liquidación es 'inmediato'.",
+		{},
+		async () => toolResult(await callApi("GET", "/pagos/cargos/pendientes")),
+	);
+
+	server.tool(
+		"simulator_flush_pending_cargos",
+		"Manda un solo Cargos con todo lo acumulado del día operativo vigente (POST " +
+			"/pagos/cargos/liquidar-lote, spec 014, modo acumulado). 409 si no hay nada pendiente.",
+		{},
+		async () => toolResult(await callApi("POST", "/pagos/cargos/liquidar-lote")),
+	);
+
+	server.tool(
+		"simulator_payment_balance",
+		"Saldo del día operativo vigente (GET /pagos/saldo, spec 014) -- balance y reservedBalance " +
+			"tal como se le reportaron a minos en el último Cargos.",
+		{},
+		async () => toolResult(await callApi("GET", "/pagos/saldo")),
+	);
+
+	server.tool(
+		"simulator_close_operational_day",
+		"Cierra el día operativo (POST /dia/cerrar, spec 014) -- manda LiquidacionFinal a minos. " +
+			"Solo manual, nunca automático (es un evento de cierre de día, no algo que se simule por " +
+			"cron dentro de una herramienta de pruebas bajo demanda).",
+		{ montoFinal: z.number().optional().describe("Monto final del día, default 0.") },
+		async ({ montoFinal }) => toolResult(await callApi("POST", "/dia/cerrar", montoFinal !== undefined ? { montoFinal } : {})),
+	);
+
 	return server;
 }
 

@@ -35,4 +35,8 @@ public final class SpeiProtocol {
 	public static final int OP_ABONOS = 25;
 	public static final int OP_ACUSERECIBO = 27;
 	public static final int OP_AREYOUALIVE = 245;
+	// Spec 014 -- verificados contra ToSpeiInputMessage.java (repo mki, vigente 2026-09-28; code/minos
+	// local está desactualizado, ver minos_wire_protocol_verification).
+	public static final int OP_CARGOS = 24;
+	public static final int OP_LIQUIDACIONFINAL = 51;
 }
