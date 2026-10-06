@@ -25,11 +25,11 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 |---|---|---|
 | [001](001-particionado-y-empaquetado.md) | Particionado y empaquetado configurable (B↔H) | En progreso |
 | [002](002-devoluciones.md) | Devoluciones (B↔H), alcance acotado al simulador | En progreso (B→H) |
-| [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Bloqueado (falta arnés) |
+| [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Implementado (2026-10-06) |
 | [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | En progreso (B→H) |
 | [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A implementada y compilada, probada por HTTP sin minos; falta verificar contra minos real (2026-09-28) |
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
-| [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Bloqueado (falta arnés) |
+| [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Implementado (2026-10-06) |
 | [008](008-msjcatalogos-contenido-real.md) | `MsjCatalogos` con contenido real | Implementado |
 | [009](009-perdida-de-iamalive.md) | Pérdida de `IAmAlive` (heartbeat) | Implementado y verificado contra minosA real (2026-10-06) — supuesto original refutado, ver spec |
 | [010](010-reconexion-a-media-transaccion.md) | Reconexión tras caída a media transacción | Borrador (depende de 001) |
@@ -43,6 +43,20 @@ tres specs asumían poder extender **no existe en el repo** (`AGENTS.md` lo desc
 "ad-hoc", nunca se comiteó). Decisión: reconstruirlo en Java bajo `src/test/java` (JUnit 5, ya
 está en `pom.xml`) en vez de Python, reutilizando las clases de cripto/wire ya existentes —
 pendiente de construir, por eso quedan "Bloqueado" y no "Borrador".
+
+**2026-10-06 — arnés Java reconstruido, 003 y 007 implementadas:** `mx.endcom.hermes.banxicosim.testsupport.SimuladorHarness`
++ `FakeMinosClient` (bajo `src/test/java`) arrancan una instancia completa del simulador en proceso
+y juegan el papel de "minos falso" (identidad RSA propia, login ARA completo incluido `PideCrtNvo`,
+reto `ClvSim`, `EnSesion`/`MsjCatalogos`, y `Reenvio` con `processedBytes` arbitrario) — ver
+`specs/003-reenvio.md` y `specs/007-renovacion-certificado.md` &sect;"Estado de implementación"
+para el detalle completo. Spec 003 sí requirió código nuevo en el simulador (`SentHistory` +
+`RecordingOutputStream` + `SpeiSession.handleReenvio` reescrito); spec 007 no (solo el escenario de
+prueba). La parte H→B de 004 (firmas corruptas) sigue pendiente — el arnés ya puede extenderse
+para cubrirla, pero no se hizo en este trabajo (fuera del alcance pedido). **Nota sobre el entorno
+de este agente:** no tenía JDK/Maven instalados nativamente — `mvn test`/`mvn -DskipTests package`
+se verificaron dentro de un contenedor `maven:3.9-eclipse-temurin-17` (Docker), montando el repo;
+quien retome este trabajo en un entorno con Maven nativo puede seguir usando los comandos de
+AGENTS.md &sect;4 tal cual.
 
 ## Siguiente paso (actualizar al avanzar)
 

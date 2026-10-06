@@ -22,6 +22,8 @@ public final class SpeiProtocol {
 	public static final int OP_INICIO_SESION_CIFRADA = 220;
 	public static final int OP_RESP_CLVSIM = 221;
 	public static final int OP_ORDEN_TOPOV = 206;
+	// Spec 003 -- ReenvioMessage.MSG_CODE: minos lo manda siempre tras MsjCatalogos, ver ReenvioCodec.
+	public static final int OP_REENVIO = 207;
 	public static final int OP_DEADSRVR = 243;
 	public static final int OP_SMTTYCLOSE = 244;
 	public static final int OP_NOSERVICE = 252;
@@ -35,6 +37,8 @@ public final class SpeiProtocol {
 	public static final int OP_ABONOS = 25;
 	public static final int OP_ACUSERECIBO = 27;
 	public static final int OP_AREYOUALIVE = 245;
+	// Spec 003 -- FinReenvioMessage.OP, ver ToSpeiInputMessage.
+	public static final int OP_FINREENVIO = 32;
 	// Spec 014 -- verificados contra ToSpeiInputMessage.java (repo mki, vigente 2026-09-28; code/minos
 	// local está desactualizado, ver minos_wire_protocol_verification).
 	public static final int OP_CARGOS = 24;

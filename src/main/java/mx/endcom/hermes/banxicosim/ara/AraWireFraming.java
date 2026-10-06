@@ -72,4 +72,23 @@ public final class AraWireFraming {
 
 	public record ParsedSignedBody(byte[] content, byte[] signatureB64) {
 	}
+
+	/**
+	 * Contraparte de {@link #buildSignedBody} -- deshace el cuerpo de {@code RegCrtNvoFmt}/
+	 * {@code CrtNoExiste} (los dos mensajes que el simulador arma con este formato CON relleno,
+	 * ver nota de clase). No existía hasta que el arnés de pruebas Java (spec 007, 2026-10-06)
+	 * necesitó parsear la respuesta a {@code PideCrtNvo} jugando el papel de minos -- a diferencia
+	 * de minos real, que sí tiene el desajuste del {@code +1}, este parser replica la fórmula de
+	 * construcción exacta de {@link #buildSignedBody} (simétrica, sin el desajuste) porque es el
+	 * lado que SÍ controla cómo se construyó el mensaje.
+	 */
+	public static ParsedSignedBody parsePaddedSignedBody(byte[] wireBody) {
+		ByteReader r = new ByteReader(wireBody);
+		int sigSize = r.readIntBE();
+		int contentLen = wireBody.length - 4 - 1 - sigSize;
+		byte[] content = r.readBytes(contentLen);
+		r.readUnsignedByte(); // byte de relleno, ver nota de clase de buildSignedBody
+		byte[] signatureB64 = r.readBytes(sigSize);
+		return new ParsedSignedBody(content, signatureB64);
+	}
 }
