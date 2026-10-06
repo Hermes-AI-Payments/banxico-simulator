@@ -15,9 +15,11 @@ import mx.endcom.hermes.banxicosim.wire.ByteWriter;
  * Esto no está en el resumen de fases de la spec técnica pero SÍ es necesario en el código real
  * (verificado: {@code processMsjCatalogosMessage} llama a {@code sendReenvio} incondicionalmente).
  *
- * <p>v1 simplifica: siempre responde "no hay nada que reenviar" (contadores y saldos en cero) —
- * suficiente para una sesión de prueba que arranca limpia en cada corrida. No implementa
- * reenvío real de mensajes previos.</p>
+ * <p>Spec 003 (2026-10-06): {@code SpeiSession.handleReenvio} ya NO simplifica — reenvía de
+ * verdad los bytes mandados después de {@code processedBytes} (ver {@code SentHistory}).
+ * {@code FinReenvio} se sigue mandando con contadores en cero: la spec no pide que reporte cuánto
+ * se reenvió, sólo que cierre el intercambio sin error — ver {@code specs/003-reenvio.md}
+ * &sect;"Estado de implementación".</p>
  */
 public final class ReenvioCodec {
 
@@ -34,6 +36,21 @@ public final class ReenvioCodec {
 		return new Reenvio(ts, processedBytes);
 	}
 
+	/**
+	 * Construye el cuerpo (sin cifrar) de {@code Reenvio} tal como lo manda minos real -- el
+	 * simulador nunca lo había necesitado mandar (solo lo recibe), así que no existía un "build"
+	 * hasta que el arnés de pruebas Java (specs 003/007, 2026-10-06) necesitó poder jugar el papel
+	 * de minos para ejercitar {@code SpeiSession.handleReenvio} de punta a punta. El cuerpo va
+	 * cifrado con AES de sesión antes de mandarse (ver {@code AesCipher.encrypt}, simple, sin
+	 * particionar ni firmar -- igual que {@link #buildFinReenvioBody}).
+	 */
+	public static byte[] buildReenvioBody(LocalDateTime timestamp, int processedBytes) {
+		return new ByteWriter()
+				.writeDateTime(timestamp)
+				.writeIntBE(processedBytes)
+				.toByteArray();
+	}
+
 	public static byte[] buildFinReenvioBody() {
 		return new ByteWriter()
 				.writeDateTime(LocalDateTime.now())
@@ -42,5 +59,22 @@ public final class ReenvioCodec {
 				.writeIntBE(0) // bytesClientToServer
 				.writeMoney(BigDecimal.ZERO) // reservedBalance
 				.toByteArray();
+	}
+
+	public record FinReenvio(LocalDateTime timestamp, int bytesServerToClient, BigDecimal totalBalance,
+			int bytesClientToServer, BigDecimal reservedBalance) {
+	}
+
+	/** Contraparte de {@link #buildFinReenvioBody} -- usada por el arnés de pruebas para confirmar
+	 *  que {@code FinReenvio} llega bien formado y sin error (criterio de aceptación "b" de
+	 *  specs/003-reenvio.md). */
+	public static FinReenvio parseFinReenvio(byte[] plaintextBody) {
+		ByteReader r = new ByteReader(plaintextBody);
+		LocalDateTime ts = r.readDateTime();
+		int bytesServerToClient = r.readIntBE();
+		BigDecimal totalBalance = r.readMoney();
+		int bytesClientToServer = r.readIntBE();
+		BigDecimal reservedBalance = r.readMoney();
+		return new FinReenvio(ts, bytesServerToClient, totalBalance, bytesClientToServer, reservedBalance);
 	}
 }

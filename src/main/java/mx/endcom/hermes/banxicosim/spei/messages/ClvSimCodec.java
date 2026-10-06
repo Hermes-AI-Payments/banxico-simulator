@@ -78,6 +78,40 @@ public final class ClvSimCodec {
 		return new ClvSimBody(body, new SessionKeys(key, iv, raw));
 	}
 
+	public record ClvSimRequest(byte[] rawSymmetricKey, byte[] key, byte[] iv) {
+	}
+
+	/**
+	 * Contraparte de {@link #build} -- parsea el cuerpo de {@code ClvSim} tal como lo manda el
+	 * simulador, para que el arnés de pruebas Java (specs 003/007, 2026-10-06) pueda jugar el
+	 * papel de minos y completar el desafío (necesita la llave/IV de sesión para todo lo que viene
+	 * después: {@code MsjCatalogos}, {@code Reenvio}). No existía hasta ahora porque el simulador
+	 * nunca necesita parsear su propio {@code ClvSim}, sólo construirlo.
+	 */
+	public static ClvSimRequest parse(byte[] clvSimBody, PrivateKey minosPrivateKey) throws Exception {
+		ByteReader r = new ByteReader(clvSimBody);
+		r.readShortBE(); // idEncryptionAlgorithm, no validado (ver build)
+		String encryptedB64 = r.readCString();
+		r.readCString(); // firma propia del simulador -- decorativa, ver nota de clase
+		byte[] raw = RsaCipher.decryptOaepSha512FromBase64(
+				encryptedB64.getBytes(StandardCharsets.US_ASCII), minosPrivateKey);
+		byte[] key = java.util.Arrays.copyOfRange(raw, 0, 16);
+		byte[] iv = java.util.Arrays.copyOfRange(raw, 16, 32);
+		return new ClvSimRequest(raw, key, iv);
+	}
+
+	/**
+	 * Construye el cuerpo de {@code RespClvSim} tal como lo manda minos real -- usado por el arnés
+	 * de pruebas Java para completar el desafío ClvSim del lado de "minos falso" (specs 003/007).
+	 * Firma con {@code SHA256withRSA} (rama {@code master} de minos real); {@link #verifyResponse}
+	 * ya intenta ambos esquemas de firma (ver {@code RsaCipher.verifyEitherScheme}), así que esto
+	 * basta para que el arnés verifique en verde contra el simulador sin importar qué rama imite.
+	 */
+	public static byte[] buildRespClvSimBody(byte[] rawSymmetricKey, PrivateKey minosPrivateKey) throws Exception {
+		byte[] sigB64 = RsaCipher.encodeBase64(RsaCipher.sign(rawSymmetricKey, minosPrivateKey));
+		return new ByteWriter().writeCString(new String(sigB64, StandardCharsets.US_ASCII)).toByteArray();
+	}
+
 	public record RespClvSimResult(boolean signatureVerified) {
 	}
 

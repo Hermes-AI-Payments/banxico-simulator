@@ -86,6 +86,9 @@ public final class SpeiSession implements Runnable {
 	private final RedVariacionControl redVariacion;
 	// Spec 014: rechazo forzado de una orden de OrdenTopoV -- ver RechazoForzadoRegistry.
 	private final RechazoForzadoRegistry rechazoForzadoRegistry;
+	// Spec 003: historial de bytes mandados en esta sesión, para poder atender un Reenvio real --
+	// ver SentHistory y RecordingOutputStream (envuelve el stream real en run()).
+	private final SentHistory sentHistory = new SentHistory();
 
 	private DataOutputStream out;
 	private byte[] sessionKey;
@@ -167,8 +170,13 @@ public final class SpeiSession implements Runnable {
 				// variación de tipo "throttling" cambia la tasa del TokenBucket compartido.
 				DataInputStream in = new DataInputStream(
 						new ThrottledInputStream(socket.getInputStream(), redVariacionRegistry.limiteEntrada()));
+				// Spec 003: RecordingOutputStream va entre DataOutputStream y ThrottledOutputStream para
+				// que el historial refleje exactamente los bytes que salen por el socket, en el mismo
+				// orden, sin que el throttling (spec 005) afecte qué queda registrado -- ver SentHistory.
 				DataOutputStream dataOut = new DataOutputStream(
-						new ThrottledOutputStream(socket.getOutputStream(), redVariacionRegistry.limiteSalida()))) {
+						new RecordingOutputStream(
+								new ThrottledOutputStream(socket.getOutputStream(), redVariacionRegistry.limiteSalida()),
+								sentHistory))) {
 			this.out = dataOut;
 			logger.info("[SPEI] Conexión entrante de {}", socket.getRemoteSocketAddress());
 
@@ -406,7 +414,7 @@ public final class SpeiSession implements Runnable {
 			Frame frame = Frame.read(in);
 			switch (frame.operation()) {
 				case SpeiProtocol.OP_INICIO_SESION_CIFRADA -> handleInicioSesionCifrada(frame);
-				case 207 -> handleReenvio(frame); // ReenvioMessage.MSG_CODE, ver ReenvioCodec
+				case SpeiProtocol.OP_REENVIO -> handleReenvio(frame); // ReenvioMessage.MSG_CODE, ver ReenvioCodec
 				case SpeiProtocol.OP_ORDEN_TOPOV -> handleOrdenTopoV(frame, in);
 				case SpeiProtocol.OP_IAMALIVE -> logger.info("[SPEI] << IAmAlive");
 				case SpeiProtocol.OP_DEADSRVR, SpeiProtocol.OP_SMTTYCLOSE, SpeiProtocol.OP_NOSERVICE -> {
@@ -442,19 +450,42 @@ public final class SpeiSession implements Runnable {
 		}
 	}
 
+	/**
+	 * Spec 003 -- reenvío real: {@code processedBytes} es una posición absoluta en el historial de
+	 * bytes que este simulador ha mandado en la sesión (ver {@link SentHistory}); si todavía hay
+	 * algo después de esa posición, se reenvía tal cual (mismos bytes, sin re-cifrar ni re-firmar
+	 * -- ver la nota de diseño en {@link SentHistory}) antes de responder {@code FinReenvio}. El
+	 * reenvío se manda por {@code out} igual que cualquier otro envío, así que también pasa por
+	 * {@code RecordingOutputStream} y queda registrado en el historial (correcto: ese reenvío
+	 * también son bytes que el simulador mandó en la sesión).
+	 */
 	private void handleReenvio(Frame frame) throws Exception {
 		byte[] plaintext = AesCipher.decrypt(frame.body(), sessionKey, sessionIv);
 		ReenvioCodec.Reenvio reenvio = ReenvioCodec.parse(plaintext);
 		store.logEvent(runId, "IN", "Reenvio", frame.operation(), "recibido",
 				"bytesProcesados=" + reenvio.processedBytes(), frame.body());
-		logger.info("[SPEI] << Reenvio (bytesProcesados={}), respondo FinReenvio sin reenvÍo real (v1)",
-				reenvio.processedBytes());
+
+		long total = sentHistory.length();
+		long processed = Integer.toUnsignedLong(reenvio.processedBytes());
+		if (processed < total) {
+			byte[] pending = sentHistory.bytesFrom(processed);
+			synchronized (writeLock) {
+				out.write(pending);
+				out.flush();
+			}
+			store.logEvent(runId, "OUT", "ReenvioBytes", 0, "reenviado",
+					"bytesProcesados=" + processed + " bytesReenviados=" + pending.length, pending);
+			logger.info("[SPEI] << Reenvio (bytesProcesados={}), reenvío real de {} bytes (spec 003)",
+					processed, pending.length);
+		} else {
+			logger.info("[SPEI] << Reenvio (bytesProcesados={}), nada que reenviar (ya tiene todo lo mandado)",
+					processed);
+		}
 
 		byte[] finReenvioPlain = ReenvioCodec.buildFinReenvioBody();
 		byte[] finReenvioCipher = AesCipher.encrypt(finReenvioPlain, sessionKey, sessionIv);
-		// FinReenvioMessage.OP = 32 (ver ToSpeiInputMessage)
-		sendConVariacion("FinReenvio", Frame.of(32, finReenvioCipher));
-		store.logEvent(runId, "OUT", "FinReenvio", 32, "enviado", null, finReenvioCipher);
+		sendConVariacion("FinReenvio", Frame.of(SpeiProtocol.OP_FINREENVIO, finReenvioCipher));
+		store.logEvent(runId, "OUT", "FinReenvio", SpeiProtocol.OP_FINREENVIO, "enviado", null, finReenvioCipher);
 		logger.info("[SPEI] >> FinReenvio");
 	}
 

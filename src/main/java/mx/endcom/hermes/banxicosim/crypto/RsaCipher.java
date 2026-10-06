@@ -77,6 +77,27 @@ public final class RsaCipher {
 		return encodeBase64(encryptOaepSha512(data, publicKey));
 	}
 
+	/**
+	 * Contraparte de descifrado de {@link #encryptOaepSha512} -- el simulador mismo nunca la
+	 * necesita (sólo cifra el reto {@code ClvSim}, nunca lo descifra), pero el arnés de pruebas
+	 * Java (specs 003/007, 2026-10-06) sí: para jugar el papel de minos de punta a punta tiene que
+	 * poder descifrar la llave simétrica de sesión que el simulador le manda cifrada con SU llave
+	 * pública. Mismo algoritmo/proveedor exactos que {@link #encryptOaepSha512} (inverso
+	 * matemático de la misma transformación ya verificada contra minos real, no una afirmación
+	 * nueva sobre minos).
+	 */
+	public static byte[] decryptOaepSha512(byte[] data, Key privateKey) throws Exception {
+		Cipher cipher = Cipher.getInstance(CIPHER_ALGO_CLVSIM, "BC");
+		cipher.init(Cipher.DECRYPT_MODE, privateKey);
+		return cipher.doFinal(data);
+	}
+
+	/** Como {@link #decryptOaepSha512} pero decodificando Base64 primero -- contraparte de
+	 *  {@link #encryptOaepSha512ToBase64}. */
+	public static byte[] decryptOaepSha512FromBase64(byte[] base64Data, Key privateKey) throws Exception {
+		return decryptOaepSha512(Base64.getDecoder().decode(base64Data), privateKey);
+	}
+
 	public static byte[] decrypt(byte[] data, Key privateKey) throws Exception {
 		Cipher cipher = Cipher.getInstance(CIPHER_ALGO);
 		cipher.init(Cipher.DECRYPT_MODE, privateKey);
