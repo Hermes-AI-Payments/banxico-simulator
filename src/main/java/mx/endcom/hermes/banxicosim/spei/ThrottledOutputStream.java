@@ -21,6 +21,16 @@ final class ThrottledOutputStream extends OutputStream {
 	 *  por dirección, mutable en caliente cuando arranca/termina una variación de throttling (ver
 	 *  {@link RedVariacionRegistry}). {@code Long.MAX_VALUE} = sin límite (no aplica pacing). */
 	static final class TokenBucket {
+
+		/** Tope de acumulación de tokens, independiente de la tasa configurada -- ver bug
+		 *  2026-10-06 en {@link #rellenar(long)}: si el tope fuera igual a la tasa (como estaba
+		 *  antes), un mensaje más grande que bytes/segundo nunca junta suficientes tokens y
+		 *  {@link #consumir(int)} se queda esperando para siempre (confirmado en vivo contra
+		 *  minosA real -- un Abonos de 896 bytes a 5 B/s nunca completó, ver specs/005 &sect;"Estado
+		 *  de implementación"). 1 MiB es más que cualquier frame SPEI real, así que nunca bloquea
+		 *  un mensaje legítimo, y sigue acotado (no crece sin límite tras una espera larga). */
+		private static final double CAPACIDAD_MAXIMA = 1_048_576;
+
 		private final AtomicLong bytesPorSegundo;
 		private double tokens;
 		private long ultimoRellenoNanos;
@@ -31,8 +41,17 @@ final class ThrottledOutputStream extends OutputStream {
 			this.ultimoRellenoNanos = System.nanoTime();
 		}
 
-		void setBytesPorSegundo(long valor) {
-			bytesPorSegundo.set(normalizar(valor));
+		/** Cambia la tasa vigente. Si pasa de sin-límite (o de una tasa alta) a una tasa baja,
+		 *  acota también {@code tokens} a la tasa nueva -- si no, el throttling recién armado
+		 *  heredaría una ráfaga inicial grande (el remanente de antes de activarse) en vez de
+		 *  empezar a limitar de inmediato. {@link #rellenar(long)} sigue permitiendo que, DESPUÉS
+		 *  de esto, {@code tokens} crezca hasta {@link #CAPACIDAD_MAXIMA} mientras algo espera. */
+		synchronized void setBytesPorSegundo(long valor) {
+			long normalizado = normalizar(valor);
+			bytesPorSegundo.set(normalizado);
+			if (normalizado != Long.MAX_VALUE) {
+				tokens = Math.min(tokens, normalizado);
+			}
 		}
 
 		private static long normalizar(long v) {
@@ -67,7 +86,7 @@ final class ThrottledOutputStream extends OutputStream {
 			long ahora = System.nanoTime();
 			double segundosTranscurridos = (ahora - ultimoRellenoNanos) / 1_000_000_000.0;
 			ultimoRellenoNanos = ahora;
-			tokens = Math.min(limite, tokens + segundosTranscurridos * limite);
+			tokens = Math.min(CAPACIDAD_MAXIMA, tokens + segundosTranscurridos * limite);
 		}
 	}
 

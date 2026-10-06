@@ -335,15 +335,22 @@ vencimiento automático a los 5s, validación de los 4 límites, rechazo de `cor
   un abono duplicado a nivel de wire (p.ej. por una retransmisión TCP peculiar) podría contabilizarse
   dos veces del lado de minos -- vale la pena que el equipo de minos lo sepa, aunque esté fuera del
   alcance de este simulador corregirlo.
-- **(d) Throttling a una tasa baja (5 B/s):** confirmado que degrada sin colgar la sesión de forma
-  permanente -- un `Abonos` normal (milisegundos) tardó varios minutos en completarse, la sesión
-  siguió `alive:true` durante todo el proceso. Hallazgo cruzado con (b)/spec 009: el heartbeat
-  saliente se **detuvo por completo** mientras duró el envío throttleado (comparten `writeLock`,
-  por diseño -- ver "Por qué no hay un decorador único de socket" arriba) -- varios minutos sin
-  `AreYouAlive` no afectaron a minos en absoluto, confirmando una vez más que su ausencia de
-  timeout de heartbeat real es lo que hace que este escenario extremo sea seguro de probar.
+- **(d) Throttling a una tasa baja (5 B/s): primer intento encontró un bug real, corregido y
+  re-verificado.** Un `Abonos` de 896 bytes nunca completó -- ni tras 25+ minutos reales, hasta que
+  se restató el contenedor para liberarlo. **No era solo lento, estaba colgado para siempre**:
+  `ThrottledOutputStream.TokenBucket.rellenar()` topaba la acumulación de tokens al mismo valor que
+  la tasa configurada (`Math.min(limite, ...)`), así que un mensaje más grande que esa tasa nunca
+  podía juntar suficientes tokens -- el bucket quedaba atorado exactamente en `limite` para siempre,
+  sin importar cuánto se esperara. Corregido (`CAPACIDAD_MAXIMA` de 1 MiB, independiente de la tasa,
+  más una corrección en `setBytesPorSegundo` para no heredar una ráfaga inicial grande al activar
+  throttling) -- test de regresión en `ThrottledOutputStreamTest` que hubiera colgado para siempre
+  con el bug viejo (pasa en ~4.5s con el fix). **Pendiente de re-verificar contra minosA real tras
+  el fix** -- el contenedor se reinició para liberar la conexión atorada; falta repetir el mismo
+  escenario (5 B/s, `Abonos` real) una vez redesplegado el fix.
 
-**Ya se puede mergear a `main`** -- los cuatro pasos requeridos están hechos contra minos real.
+**Código de (a)-(c) y el fix de (d) ya en `main`** -- falta solo repetir (d) contra minosA real tras
+el redeploy para dar los cuatro pasos por completos (el fix en sí ya tiene test de regresión, pero
+la disciplina de esta spec pide confirmación contra minos real, no solo el test unitario).
 
 La semántica exacta de `ocurrencia` (entero = dispara una vez y termina; `"siguiente"` = dispara
 desde la próxima ocurrencia en adelante mientras la variación siga activa) es una interpretación
