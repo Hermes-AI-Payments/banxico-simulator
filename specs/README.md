@@ -27,7 +27,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [002](002-devoluciones.md) | Devoluciones (B↔H), alcance acotado al simulador | En progreso (B→H) |
 | [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Implementado (2026-10-06) |
 | [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | En progreso (B→H) |
-| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A implementada y compilada, probada por HTTP sin minos; falta verificar contra minos real (2026-09-28) |
+| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A implementada y verificada contra minosA real (2026-10-06): corte, retraso, duplicación y throttling confirmados. Capa B (red real, host) no empezada |
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
 | [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Implementado (2026-10-06) |
 | [008](008-msjcatalogos-contenido-real.md) | `MsjCatalogos` con contenido real | Implementado |
@@ -71,16 +71,15 @@ En orden:
    intercambiándose normal). Falta nada más que cerrar formalmente los criterios pendientes de 011
    y 013 (mandar un abono y confirmar `cierre` en `GET /session` al terminar una sesión) cuando
    alguien lo dispare.
-3. **Implementada spec 005, capa A, el mismo 2026-09-28** — las 5 clases, config, rutas HTTP y
-   tools MCP de `specs/005-variaciones-de-red.md` §"Diseño de implementación de Capa A" ya están en
-   el repo; compila (`mvn -DskipTests package`) y se probó por HTTP sin minos (armar/consultar/
-   detener variación, 409, vencimiento automático, validación de límites). **Sigue pendiente el
-   paso 4 de "Orden de commits" del spec: verificar contra minos real** (corte real, retraso al
-   límite, duplicación, throttling) antes de mergear a `main` — ver
-   `specs/005-variaciones-de-red.md` §"Estado de implementación".
+3. **Implementada spec 005, capa A, el 2026-09-28; verificada contra minosA real el 2026-10-06** —
+   las 5 clases, config, rutas HTTP y tools MCP ya están en el repo; compila y se probó tanto por
+   HTTP sin minos como, ahora, los cuatro escenarios reales (corte en `post-ClvSim`, retraso al
+   límite de 2500ms, duplicación de un `Abonos`, throttling a 5 B/s) contra minosA — ver
+   `specs/005-variaciones-de-red.md` §"Estado de implementación" para el detalle y dos hallazgos
+   nuevos (minos no deduplica frames repetidos; el heartbeat comparte `writeLock` con cualquier
+   envío throttleado, así que un envío lento lo pausa por completo). Lista para main.
 4. **Capa B** (`deploy.sh`, `scripts/host/pruebas-red.sh`, reescritura del skill a solo-MCP) —
-   no empezada; queda para después de validar capa A contra minos real, ya que instala un script
-   con dueño root en el host real.
+   no empezada; instala un script con dueño root en el host real, decisión aparte de cuándo hacerla.
 
 ## Decisiones de alcance (2026-09-21)
 

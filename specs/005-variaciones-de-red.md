@@ -318,11 +318,32 @@ corriendo sin minos** (`/capacidades`, armar/consultar/detener una variación, c
 vencimiento automático a los 5s, validación de los 4 límites, rechazo de `corte` sin prefijo
 `post-`) -- todo se comportó como se esperaba.
 
-**NO probado todavía contra minos real** -- el paso 4 de "Orden de commits" arriba (a-d) sigue
-pendiente: corte real en `post-ClvSim` con `causa: corte-deliberado` en `GET /session`, retraso al
-límite (2500ms) sin disparar el timeout de minos, duplicación de un `Abonos` sin tronar el parser,
-throttling degradando sin colgar la sesión. **No mergear a `main` sin esos cuatro pasos hechos
-contra minos real** (la razón de por qué está en el propio spec, arriba).
+**Verificado contra minosA real 2026-10-06 -- los cuatro pasos (a)-(d):**
+
+- **(a) Corte en `post-ClvSim`:** confirmado byte a byte. Secuencia real:
+  `Greeting→SmLoginReq→Login→EnSesion→ClvSim→RespClvSim`, corte inmediato después. `GET /session`
+  mostró `"cierre":{"causa":"corte-deliberado","detalle":"post-ClvSim"}` -- exactamente lo
+  esperado, no `error-io` ni `minos-cerro`.
+- **(b) Retraso al límite (2500ms) en `AreYouAlive`:** confirmado. Un ciclo de heartbeat pasó de
+  los ~3s normales a ~5.5s (3000 + 2500), sin que minos reaccionara -- consistente con el hallazgo
+  de spec 009 (minos no tiene timeout real por ausencia de heartbeat), así que este criterio queda
+  confirmado de forma aún más sólida de lo que la spec original anticipaba.
+- **(c) Duplicación de un `Abonos`:** confirmado que minos no truena -- pero con un hallazgo
+  adicional real: minos no deduplica. Recibió el frame idéntico dos veces (mismos bytes exactos) y
+  lo **procesó dos veces de forma independiente** (`AbonoInceptionMessage`, dos `AcuseParteCas`, dos
+  registros separados en Estigia con la misma `cvesRastreo`). En producción esto significaría que
+  un abono duplicado a nivel de wire (p.ej. por una retransmisión TCP peculiar) podría contabilizarse
+  dos veces del lado de minos -- vale la pena que el equipo de minos lo sepa, aunque esté fuera del
+  alcance de este simulador corregirlo.
+- **(d) Throttling a una tasa baja (5 B/s):** confirmado que degrada sin colgar la sesión de forma
+  permanente -- un `Abonos` normal (milisegundos) tardó varios minutos en completarse, la sesión
+  siguió `alive:true` durante todo el proceso. Hallazgo cruzado con (b)/spec 009: el heartbeat
+  saliente se **detuvo por completo** mientras duró el envío throttleado (comparten `writeLock`,
+  por diseño -- ver "Por qué no hay un decorador único de socket" arriba) -- varios minutos sin
+  `AreYouAlive` no afectaron a minos en absoluto, confirmando una vez más que su ausencia de
+  timeout de heartbeat real es lo que hace que este escenario extremo sea seguro de probar.
+
+**Ya se puede mergear a `main`** -- los cuatro pasos requeridos están hechos contra minos real.
 
 La semántica exacta de `ocurrencia` (entero = dispara una vez y termina; `"siguiente"` = dispara
 desde la próxima ocurrencia en adelante mientras la variación siga activa) es una interpretación
@@ -339,10 +360,11 @@ diferencia de la Capa A que es código Java en el propio proceso.
 
 ## Criterios de aceptación
 
-- [ ] `GET /capacidades` y `simulator_capabilities` informan correctamente capa A siempre, y capa
+- [x] `GET /capacidades` y `simulator_capabilities` informan correctamente capa A siempre, y capa
       B solo cuando el script del host está instalado y responde.
-- [ ] Capa A: retraso a un abono concreto (o a los próximos N), corte después de un mensaje
-      nombrado, y duplicación de trama, disparables por la API sin tocar código entre corridas.
+- [x] Capa A: retraso a un abono concreto (o a los próximos N), corte después de un mensaje
+      nombrado, y duplicación de trama, disparables por la API sin tocar código entre corridas --
+      los tres verificados contra minosA real 2026-10-06, ver "Estado de implementación".
 - [ ] Capa B: pérdida, reordenamiento y MTU aplicados **solo** al tráfico del puerto SPEI; la API
       de control responde normalmente mientras hay una variación activa.
 - [ ] Toda variación vence sola; con la API detenida a la mitad, el host la retira igual al
