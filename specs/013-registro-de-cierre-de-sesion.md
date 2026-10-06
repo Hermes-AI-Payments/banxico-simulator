@@ -26,7 +26,7 @@ las pruebas de corte y de red (spec 005) y de heartbeat (spec 009) quieren medir
 | Causa | Cuándo |
 |---|---|
 | `minos-cerro` | EOF en la lectura, o minos mandó `DeadSrvr`/`SmTtyClose`/`NoService` (detalle: `op N`) |
-| `heartbeat-fallo` | Falló el envío de `AreYouAlive`: la sesión se cierra en ese momento (antes solo se detenía el heartbeat y la lectura podía quedar bloqueada si minos desapareció sin FIN) |
+| `heartbeat-fallo` | Falló el **envío** (del lado del simulador) de `AreYouAlive`: la sesión se cierra en ese momento. Nota (2026-10-06, ver spec 009): esto depende de que la escritura del simulador falle -- p.ej. porque minos ya desapareció sin FIN y el socket está roto -- no de que minos deje de *recibir* heartbeats; confirmado contra el código real de minos que un timeout de lectura por ausencia de `AreYouAlive` no provoca ningún cierre de su lado, así que este causa solo aplica a fallas reales de E/S del lado del simulador, no a "minos cerró porque no le llegó el heartbeat" |
 | `error-io` | Otra falla de I/O del socket (timeout, reset, broken pipe); detalle: clase y mensaje |
 | `error-protocolo` | Cualquier otra excepción (trama malformada, firma o cifrado inválidos) |
 | `corte-deliberado` | Reservada para la capa A de spec 005 |
@@ -61,5 +61,13 @@ arranque con esta versión: las corridas anteriores (sin cierre registrado) qued
 - [x] `GET /session` muestra `cierre` en una sesión terminada (probado local, también vía MCP).
 - [x] Una corrida que queda abierta al apagar el simulador queda `sin-registro` al arrancar, sin
       duplicarse en arranques siguientes.
-- [ ] Una sesión que muere por timeout de heartbeat (spec 009) deja la causa correcta y su hora —
-      requiere minos real, pendiente de confirmar en el host.
+- [x] ~~Una sesión que muere por timeout de heartbeat (spec 009) deja la causa correcta y su
+      hora~~ -- **reescrito 2026-10-06, el escenario tal como estaba planteado no existe.**
+      Verificado contra minosA real y contra el código fuente de minos (ver spec 009): minos no
+      cierra la sesión por ausencia de heartbeat, así que no hay "muerte por timeout de
+      heartbeat" que confirmar de ese lado. La causa `heartbeat-fallo` sigue siendo válida pero
+      solo para cuando el **simulador mismo** falla al escribir `AreYouAlive` (socket ya roto del
+      lado de minos) -- no se ha forzado deliberadamente ese escenario específico (requeriría
+      romper el socket de un modo que haga fallar la escritura, no solo dejar de escribir), queda
+      como posible prueba futura de baja prioridad dado que la causa raíz original (que motivó
+      esta fila) ya no aplica.

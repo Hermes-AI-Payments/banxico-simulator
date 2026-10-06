@@ -2,11 +2,27 @@
 
 ## Contexto
 
-Mecanismo real, ya documentado y verificado contra minos (`SpeiSession.java:285-295`): minos fija
-un timeout de lectura de **6 segundos** en su socket SPEI y cierra la conexión de inmediato ante
-cualquier `IOException` de timeout, **sin reintentos**. El emisor del heartbeat es Banxico — el
-simulador manda `AreYouAlive` cada 3 segundos (`startHeartbeat()`) y minos responde `IAmAlive`.
-Nunca se ha probado deliberadamente qué pasa si el heartbeat se interrumpe.
+**Corregido 2026-10-06 — el supuesto original de esta sección era falso, refutado contra minos
+real y contra su código fuente.** Se creía (cita original: "minos fija un timeout de lectura de 6
+segundos en su socket SPEI y cierra la conexión de inmediato ante cualquier `IOException` de
+timeout, sin reintentos") que dejar de mandar `AreYouAlive` bastaba para que minos cerrara la
+sesión a los ~6s. Verificado contra `code/mki/minos` (`SpeiInputListener.java:113-121`, método
+`run()`): el bucle de lectura SÍ tiene un `SocketTimeoutException` de 6s, pero se **atrapa y se
+ignora** (`logger.debug("Sin datos de Banxico en {}, esperando siguiente mensaje...")`) -- el bucle
+sigue (`execute` no cambia), indefinidamente. Solo un `IOException` real (`read()` devuelve `-1`,
+EOF/FIN real del socket) u otra excepción dispara `closeConnection()`/`reConnect()`. Es decir:
+**minos no tiene ningún failsafe de heartbeat por timeout de lectura** -- solo nota la pérdida de
+Banxico si la conexión TCP se cierra de verdad (FIN/RST), no por ausencia de mensajes. El emisor
+del heartbeat es Banxico -- el simulador manda `AreYouAlive` cada 3 segundos (`startHeartbeat()`) y
+minos responde `IAmAlive`, pero minos nunca usa su ausencia para decidir nada.
+
+**Implicación que vale la pena escalar (no solo de testing):** si Banxico real alguna vez se queda
+silencioso a nivel de red sin mandar un FIN/RST limpio (firewall que descarta paquetes en
+silencio, por ejemplo), minos se quedaría creyendo la sesión viva indefinidamente, sin ningún
+mecanismo de por sí que lo saque de ese estado. Esto es relevante para MK I en producción (R3), no
+solo para este simulador -- vale la pena que el equipo de minos lo sepa y decida si es un riesgo
+aceptado o algo que corregir (ej. un timeout de aplicación sobre ausencia de `IAmAlive`, no solo el
+timeout de socket).
 
 ## Requisitos
 
@@ -37,15 +53,21 @@ Nunca se ha probado deliberadamente qué pasa si el heartbeat se interrumpe.
   mandar) heartbeats, para ver si eso afecta algo del lado del simulador mismo? Hoy no hay lógica
   de timeout propia documentada del lado del simulador para la recepción de `IAmAlive`.
 
-## Estado de implementación (2026-09-21)
+## Estado de implementación (2026-10-06)
 
 Implementado: `POST /heartbeat/detener` suspende de inmediato el `AreYouAlive` saliente de la
-sesión activa (`SpeiSession.suspendHeartbeat()`). **Compilado, no probado todavía contra minos
-real** — falta medir el tiempo real hasta que minos cierre la sesión y confirmar que ronda los
-6s documentados.
+sesión activa (`SpeiSession.suspendHeartbeat()`). **Probado contra minosA real (2026-10-06,
+runId 3221):** tras suspender el heartbeat, la sesión siguió `alive:true` en `GET /session` más
+de 5 minutos después, sin ningún cierre -- confirmado también en los logs reales de minos
+(`journalctl -u minosa.service`), que siguieron repitiendo cada ~6s el ciclo normal de lectura
+(`Hilo spei-tcp-1, tiempo: 6.00Xs`) sin ninguna señal de cierre, consistente con el código fuente
+citado arriba. El requisito 1 original de esta spec queda refutado: no hay nada que "confirmar
+que minos cierra" porque minos no cierra.
 
 ## Criterios de aceptación
 
-- [ ] Se puede detener el heartbeat saliente en un punto conocido de una corrida de prueba.
-- [ ] Se confirma y registra que minos cierra la sesión aproximadamente 6 segundos después de la
-      suspensión, no antes ni significativamente después.
+- [x] Se puede detener el heartbeat saliente en un punto conocido de una corrida de prueba.
+- [x] Se confirma (2026-10-06, contra minosA real) que minos **no** cierra la sesión solo por
+      ausencia de heartbeat -- la sesión permanece viva indefinidamente sin heartbeat saliente.
+      Esto contradice el supuesto original de la spec (que sí cerraría a los ~6s); queda refutado
+      y documentado arriba, no es simplemente "sin probar".

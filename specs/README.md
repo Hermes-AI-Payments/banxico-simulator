@@ -31,11 +31,11 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
 | [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Bloqueado (falta arnés) |
 | [008](008-msjcatalogos-contenido-real.md) | `MsjCatalogos` con contenido real | Implementado |
-| [009](009-perdida-de-iamalive.md) | Pérdida de `IAmAlive` (heartbeat) | Implementado |
+| [009](009-perdida-de-iamalive.md) | Pérdida de `IAmAlive` (heartbeat) | Implementado y verificado contra minosA real (2026-10-06) — supuesto original refutado, ver spec |
 | [010](010-reconexion-a-media-transaccion.md) | Reconexión tras caída a media transacción | Borrador (depende de 001) |
-| [011](011-mcp.md) | Integración MCP sobre la API de control; MCP junto a la API y plugin | En progreso (falta desplegar) |
+| [011](011-mcp.md) | Integración MCP sobre la API de control; MCP junto a la API y plugin | Implementado y desplegado, confirmado en vivo (2026-10-06) |
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
-| [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado (falta confirmar en host) |
+| [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado y confirmado en host (2026-10-06) |
 | [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Primer ciclo completo (OrdenTopoV→AcuseRecibo→Cargos) confirmado contra minosa real; faltan escenarios de rechazo (2026-10-05) |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las
