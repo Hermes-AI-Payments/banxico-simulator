@@ -344,13 +344,15 @@ vencimiento automático a los 5s, validación de los 4 límites, rechazo de `cor
   sin importar cuánto se esperara. Corregido (`CAPACIDAD_MAXIMA` de 1 MiB, independiente de la tasa,
   más una corrección en `setBytesPorSegundo` para no heredar una ráfaga inicial grande al activar
   throttling) -- test de regresión en `ThrottledOutputStreamTest` que hubiera colgado para siempre
-  con el bug viejo (pasa en ~4.5s con el fix). **Pendiente de re-verificar contra minosA real tras
-  el fix** -- el contenedor se reinició para liberar la conexión atorada; falta repetir el mismo
-  escenario (5 B/s, `Abonos` real) una vez redesplegado el fix.
+  con el bug viejo (pasa en ~4.5s con el fix). **Re-verificado contra minosA real tras redesplegar
+  el fix (runId 3699):** el mismo escenario (5 B/s, `Abonos` real de 896 bytes) completó en 143s
+  (consistente con la tasa configurada, con algo de ráfaga inicial ya acumulada), la sesión
+  permaneció `alive:true` todo el proceso, y el heartbeat -- detenido por completo mientras duró el
+  envío, mismo hallazgo cruzado con (b)/spec 009 -- se reanudó de inmediato al terminar. Criterio
+  (d) confirmado de verdad esta vez.
 
-**Código de (a)-(c) y el fix de (d) ya en `main`** -- falta solo repetir (d) contra minosA real tras
-el redeploy para dar los cuatro pasos por completos (el fix en sí ya tiene test de regresión, pero
-la disciplina de esta spec pide confirmación contra minos real, no solo el test unitario).
+**Los cuatro pasos de "Orden de commits" están hechos y confirmados contra minosA real.** Capa A
+lista -- el único pendiente real es Capa B, sin empezar (decisión aparte, ver abajo).
 
 La semántica exacta de `ocurrencia` (entero = dispara una vez y termina; `"siguiente"` = dispara
 desde la próxima ocurrencia en adelante mientras la variación siga activa) es una interpretación
@@ -370,8 +372,9 @@ diferencia de la Capa A que es código Java en el propio proceso.
 - [x] `GET /capacidades` y `simulator_capabilities` informan correctamente capa A siempre, y capa
       B solo cuando el script del host está instalado y responde.
 - [x] Capa A: retraso a un abono concreto (o a los próximos N), corte después de un mensaje
-      nombrado, y duplicación de trama, disparables por la API sin tocar código entre corridas --
-      los tres verificados contra minosA real 2026-10-06, ver "Estado de implementación".
+      nombrado, duplicación de trama, y throttling, disparables por la API sin tocar código entre
+      corridas -- los cuatro verificados contra minosA real 2026-10-06 (throttling encontró y
+      corrigió un bug real en el camino), ver "Estado de implementación".
 - [ ] Capa B: pérdida, reordenamiento y MTU aplicados **solo** al tráfico del puerto SPEI; la API
       de control responde normalmente mientras hay una variación activa.
 - [ ] Toda variación vence sola; con la API detenida a la mitad, el host la retira igual al

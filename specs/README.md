@@ -27,7 +27,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [002](002-devoluciones.md) | Devoluciones (B↔H), alcance acotado al simulador | En progreso (B→H) |
 | [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Implementado (2026-10-06) |
 | [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | En progreso (B→H) |
-| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A: corte, retraso y duplicación verificados contra minosA real (2026-10-06); throttling encontró y corrigió un bug real (colgaba para siempre), falta re-verificar el fix contra minos real. Capa B (red real, host) no empezada |
+| [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A completa y verificada contra minosA real (2026-10-06): corte, retraso, duplicación y throttling — este último encontró y corrigió un bug real (colgaba para siempre con mensajes grandes a tasas bajas), ya corregido y re-confirmado. Capa B (red real, host) no empezada |
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
 | [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Implementado (2026-10-06) |
 | [008](008-msjcatalogos-contenido-real.md) | `MsjCatalogos` con contenido real | Implementado |
