@@ -7,6 +7,10 @@ clonar este repo**:
   control en el host del simulador (spec 011).
 - **Skill `spei-network-fault-injection`** (`skills/`): diseña y ejecuta pruebas de variaciones de
   red (spec 005), siempre proponiendo el plan y esperando confirmación antes de tocar nada real.
+- **Skill `spei-pagos-rechazo-liquidacion`** (`skills/`): rechazo forzado de una orden entrante
+  (con el motivo del catálogo real que se elija), consulta de saldo, Cargos/liquidación en lote, y
+  cierre de día operativo (spec 014) — mismo criterio de plan + confirmación para lo que cambia
+  algo real.
 
 ## Instalar
 
