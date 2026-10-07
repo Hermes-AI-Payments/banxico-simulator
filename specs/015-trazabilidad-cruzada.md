@@ -75,8 +75,11 @@ diagnóstico, no un cambio al protocolo real.
 - [x] Los eventos propios del simulador (`OrdenTopoV`, `AcuseRecibo`) incluyen la(s) clave(s) de
       rastreo en su detalle, buscables en `/test-runs/{id}/events` sin decodificar `rawHex` --
       confirmado contra minosA real 2026-10-06.
-- [ ] Dada una clave de rastreo real, la herramienta arma una línea de tiempo correcta cruzando
-      Core falso + Judeca + este simulador, con los tiempos reales de cada sistema.
+- [x] Dada una clave de rastreo real, la herramienta arma una línea de tiempo correcta cruzando
+      Core falso + Judeca + este simulador, con los tiempos reales de cada sistema -- confirmado
+      2026-10-06 contra una orden real (`20261006906461075786E5E000001`), orden cronológico
+      correcto incluido el sub-segundo (Judeca procesa antes de que minos mande el `OrdenTopoV`,
+      como se espera).
 - [ ] La línea de tiempo se puede pedir como artefacto HTML compartible, no solo en el chat.
 
 ## Estado de implementación (2026-10-06)
@@ -85,5 +88,12 @@ Requisito 1 implementado, compilado, con la suite completa en verde (11/11 tests
 `.200` y **confirmado contra minosA real**: una orden real enviada desde el Core falso
 (`cveRastreo=20261006906461075786E5E000001`) quedó registrada tal cual en
 `/test-runs/{id}/events` -- `OrdenTopoV` con `clavesRastreo=...` y `AcuseRecibo` con
-`resultadoPorClave=...:ACEPTADA`, ambos buscables directo, sin decodificar `rawHex`. Requisitos 2 y
-3 (la herramienta de línea de tiempo en sí) sin empezar — siguiente paso.
+`resultadoPorClave=...:ACEPTADA`, ambos buscables directo, sin decodificar `rawHex`.
+
+**Requisito 2 implementado y verificado contra datos reales (2026-10-06):**
+`.claude/skills/spei-trazabilidad-pago/scripts/timeline.py` junta las tres fuentes (Judeca por
+SSH, este simulador, Core falso) y arma la tabla correctamente ordenada -- probado de punta a
+punta con una orden real, orden cronológico correcto incluido el sub-segundo.
+
+**Requisito 3 (artefacto HTML para compartir) sin empezar** -- la skill ya documenta que se hace
+solo si se pide explícitamente, pendiente de implementar el camino de publicación en sí.
