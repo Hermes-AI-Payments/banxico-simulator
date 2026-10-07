@@ -37,7 +37,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
 | [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado y confirmado en host (2026-10-06) |
 | [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Primer ciclo completo (OrdenTopoV→AcuseRecibo→Cargos) confirmado contra minosa real; faltan escenarios de rechazo (2026-10-05) |
-| [015](015-trazabilidad-cruzada.md) | Trazabilidad cruzada de una orden/pago (línea de tiempo Core falso↔Judeca↔simulador) | En progreso — clave de rastreo ya en los eventos propios del simulador, falta la herramienta de línea de tiempo (2026-10-06) |
+| [015](015-trazabilidad-cruzada.md) | Trazabilidad cruzada de una orden/pago (línea de tiempo Core falso↔Judeca↔simulador) | En progreso — clave de rastreo en eventos propios confirmada contra minosA real, falta la herramienta de línea de tiempo (2026-10-06) |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las
 tres specs asumían poder extender **no existe en el repo** (`AGENTS.md` lo describe como

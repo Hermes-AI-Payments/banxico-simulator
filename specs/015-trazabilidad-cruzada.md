@@ -73,14 +73,17 @@ diagnóstico, no un cambio al protocolo real.
 ## Criterios de aceptación
 
 - [x] Los eventos propios del simulador (`OrdenTopoV`, `AcuseRecibo`) incluyen la(s) clave(s) de
-      rastreo en su detalle, buscables en `/test-runs/{id}/events` sin decodificar `rawHex`.
+      rastreo en su detalle, buscables en `/test-runs/{id}/events` sin decodificar `rawHex` --
+      confirmado contra minosA real 2026-10-06.
 - [ ] Dada una clave de rastreo real, la herramienta arma una línea de tiempo correcta cruzando
       Core falso + Judeca + este simulador, con los tiempos reales de cada sistema.
 - [ ] La línea de tiempo se puede pedir como artefacto HTML compartible, no solo en el chat.
 
 ## Estado de implementación (2026-10-06)
 
-Requisito 1 implementado, compilado (`mvn -DskipTests compile`, BUILD SUCCESS) y con la suite
-completa en verde (11/11 tests). **Pendiente desplegar a `.200` y confirmar contra minos real** que
-las claves quedan bien registradas (no solo que compila). Requisitos 2 y 3 (la herramienta de
-línea de tiempo en sí) sin empezar — siguiente paso.
+Requisito 1 implementado, compilado, con la suite completa en verde (11/11 tests), desplegado a
+`.200` y **confirmado contra minosA real**: una orden real enviada desde el Core falso
+(`cveRastreo=20261006906461075786E5E000001`) quedó registrada tal cual en
+`/test-runs/{id}/events` -- `OrdenTopoV` con `clavesRastreo=...` y `AcuseRecibo` con
+`resultadoPorClave=...:ACEPTADA`, ambos buscables directo, sin decodificar `rawHex`. Requisitos 2 y
+3 (la herramienta de línea de tiempo en sí) sin empezar — siguiente paso.
