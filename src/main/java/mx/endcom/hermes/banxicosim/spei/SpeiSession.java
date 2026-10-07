@@ -509,9 +509,16 @@ public final class SpeiSession implements Runnable {
 		}
 		WireFraming.Unwrapped unwrapped = WireFraming.parseSignedPartitioned(acc.assembledPlaintext(), minosPublicKey);
 		OrdenTopoVCodec.ParsedOrdenTopoV orden = OrdenTopoVCodec.parse(unwrapped.payload());
+		// clavesRastreo en el detalle: hace que /test-runs/{id}/events sea buscable por clave de
+		// rastreo directamente (trazabilidad cruzada con Judeca/Core falso, que ya la loguean en
+		// cada línea) sin tener que decodificar rawHex a mano.
+		String clavesRastreo = orden.orders().stream()
+				.map(OrdenTopoVCodec.Order::trackingKey)
+				.collect(java.util.stream.Collectors.joining(","));
 		store.logEvent(runId, "IN", "OrdenTopoV", frame.operation(), "recibido",
 				"folioPack=" + orden.folioPack() + " ordenes=" + orden.orders().size()
-						+ " firmaVerificada=" + unwrapped.signatureVerified(),
+						+ " firmaVerificada=" + unwrapped.signatureVerified()
+						+ " clavesRastreo=" + clavesRastreo,
 				frame.body());
 		logger.info("[SPEI] << OrdenTopoV folioPack={}, {} orden(es), firma verificada={}",
 				orden.folioPack(), orden.orders().size(), unwrapped.signatureVerified());
@@ -577,8 +584,20 @@ public final class SpeiSession implements Runnable {
 				orden.operationDate(), orden.folioPack(), orden.entityIndex(), orden.entityCode(), status, errors);
 		byte[] acuseBody = WireFraming.withLengthPrefix(acusePayload);
 		sendConVariacion("AcuseRecibo", Frame.of(SpeiProtocol.OP_ACUSERECIBO, acuseBody));
+		// Mismo motivo que en el log de OrdenTopoV arriba: resultado por clave de rastreo,
+		// buscable en /test-runs/{id}/events sin decodificar rawHex.
+		java.util.Map<Short, Character> motivoPorFolio = new java.util.HashMap<>();
+		for (AcuseReciboCodec.OrderError e : errors) {
+			motivoPorFolio.put(e.internalFolio(), e.errorCode());
+		}
+		String resultadoPorClave = orden.orders().stream()
+				.map(o -> o.trackingKey() + ":" + (motivoPorFolio.containsKey(o.internalFolio())
+						? "RECHAZADA(" + (int) (char) motivoPorFolio.get(o.internalFolio()) + ")"
+						: "ACEPTADA"))
+				.collect(java.util.stream.Collectors.joining(","));
 		store.logEvent(runId, "OUT", "AcuseRecibo", SpeiProtocol.OP_ACUSERECIBO,
-				errors.isEmpty() ? "aceptado" : "rechazado", "erroresOrdenes=" + errors.size(), acuseBody);
+				errors.isEmpty() ? "aceptado" : "rechazado",
+				"erroresOrdenes=" + errors.size() + " resultadoPorClave=" + resultadoPorClave, acuseBody);
 		logger.info("[SPEI] >> AcuseRecibo folioPack={} status={} erroresOrdenes={}",
 				orden.folioPack(), (int) status, errors.size());
 
