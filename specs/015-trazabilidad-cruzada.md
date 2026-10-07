@@ -95,5 +95,9 @@ Requisito 1 implementado, compilado, con la suite completa en verde (11/11 tests
 SSH, este simulador, Core falso) y arma la tabla correctamente ordenada -- probado de punta a
 punta con una orden real, orden cronológico correcto incluido el sub-segundo.
 
-**Requisito 3 (artefacto HTML para compartir) sin empezar** -- la skill ya documenta que se hace
-solo si se pide explícitamente, pendiente de implementar el camino de publicación en sí.
+**Extensión (2026-10-07):** `Cargos` también quedó trazable por clave de rastreo (lista, no una
+sola -- liquida un folioPack completo, puede traer varias órdenes) -- confirmado contra minosA
+real (`folio=4 entradas=1 monto=88.00 balance=1000139.00 clavesRastreo=...`).
+
+**Requisito 3 (artefacto HTML para compartir) en progreso** -- la skill ya documenta que se hace
+solo si se pide explícitamente.
