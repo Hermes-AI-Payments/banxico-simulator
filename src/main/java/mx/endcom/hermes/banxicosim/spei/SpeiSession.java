@@ -528,6 +528,12 @@ public final class SpeiSession implements Runnable {
 		// Banxico, más barata que correr el validador completo), validación real al final.
 		List<AcuseReciboCodec.OrderError> errors = new ArrayList<>();
 		List<CargosCodec.CargoEntry> aceptadasInmediato = new ArrayList<>();
+		// Spec 015 -- claves de rastreo de las órdenes que sí entran en el Cargos de este
+		// folioPack (modo inmediato), para que el Cargos quede trazable igual que OrdenTopoV/
+		// AcuseRecibo arriba. Un paquete puede traer varias órdenes aceptadas a la vez -- por eso
+		// es una lista, no una sola clave (ver conversación 2026-10-07 sobre por qué folioPack
+		// sigue importando: Cargos liquida el PAQUETE, no una orden individual).
+		List<String> clavesAceptadasInmediato = new ArrayList<>();
 		BigDecimal montoAceptadoInmediato = BigDecimal.ZERO;
 		String modoLiquidacion = config.cargosModoLiquidacion();
 		for (OrdenTopoVCodec.Order order : orden.orders()) {
@@ -569,6 +575,7 @@ public final class SpeiSession implements Runnable {
 				} else {
 					aceptadasInmediato.add(new CargosCodec.CargoEntry(
 							orden.entityIndex(), orden.entityCode(), orden.folioPack(), order.internalFolio()));
+					clavesAceptadasInmediato.add(order.trackingKey());
 					montoAceptadoInmediato = montoAceptadoInmediato.add(order.amount());
 				}
 			} else {
@@ -602,7 +609,7 @@ public final class SpeiSession implements Runnable {
 				orden.folioPack(), (int) status, errors.size());
 
 		if (!aceptadasInmediato.isEmpty()) {
-			sendCargos(orden.folioPack(), aceptadasInmediato, montoAceptadoInmediato);
+			sendCargos(orden.folioPack(), aceptadasInmediato, montoAceptadoInmediato, clavesAceptadasInmediato);
 		}
 	}
 
@@ -614,6 +621,18 @@ public final class SpeiSession implements Runnable {
 	 * acumulado), no solo el disparo automático de {@link #handleOrdenTopoV} en modo inmediato.
 	 */
 	public void sendCargos(int folio, List<CargosCodec.CargoEntry> entries, BigDecimal montoTotal) throws Exception {
+		sendCargos(folio, entries, montoTotal, null);
+	}
+
+	/**
+	 * Spec 015 -- misma lógica que {@link #sendCargos(int, List, BigDecimal)}, con las claves de
+	 * rastreo de las órdenes liquidadas para que el evento quede trazable (ver
+	 * {@code specs/015-trazabilidad-cruzada.md}). {@code cvesRastreo} es {@code null} para los
+	 * disparos manuales/de lote (API de control) -- ahí no hay órdenes reales detrás, no tiene
+	 * sentido inventar claves.
+	 */
+	public void sendCargos(int folio, List<CargosCodec.CargoEntry> entries, BigDecimal montoTotal,
+			List<String> cvesRastreo) throws Exception {
 		if (!alive) {
 			throw new IllegalStateException("No hay sesión SPEI viva todavía, no se puede mandar Cargos");
 		}
@@ -631,10 +650,12 @@ public final class SpeiSession implements Runnable {
 				Frame.of(SpeiProtocol.OP_CARGOS, frameBody).writeTo(out);
 			}
 		}
-		store.logEvent(runId, "OUT", "Cargos", SpeiProtocol.OP_CARGOS, "enviado",
-				"folio=" + folio + " entradas=" + entries.size() + " monto=" + montoTotal
-						+ " balance=" + nuevoBalance,
-				frames.get(0));
+		String detalle = "folio=" + folio + " entradas=" + entries.size() + " monto=" + montoTotal
+				+ " balance=" + nuevoBalance;
+		if (cvesRastreo != null && !cvesRastreo.isEmpty()) {
+			detalle += " clavesRastreo=" + String.join(",", cvesRastreo);
+		}
+		store.logEvent(runId, "OUT", "Cargos", SpeiProtocol.OP_CARGOS, "enviado", detalle, frames.get(0));
 		logger.info("[SPEI] >> Cargos folio={} entradas={} monto={} balance={}",
 				folio, entries.size(), montoTotal, nuevoBalance);
 	}
