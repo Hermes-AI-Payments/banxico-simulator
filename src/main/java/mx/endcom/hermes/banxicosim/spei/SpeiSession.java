@@ -86,9 +86,23 @@ public final class SpeiSession implements Runnable {
 	private final RedVariacionControl redVariacion;
 	// Spec 014: rechazo forzado de una orden de OrdenTopoV -- ver RechazoForzadoRegistry.
 	private final RechazoForzadoRegistry rechazoForzadoRegistry;
-	// Spec 003: historial de bytes mandados en esta sesión, para poder atender un Reenvio real --
-	// ver SentHistory y RecordingOutputStream (envuelve el stream real en run()).
+	// Spec 003: historial de bytes mandados en esta sesión, para poder atender un Reenvio real.
+	// Corregido 2026-10-08 (regresión real contra minosA): NO se graba todo lo que sale por el
+	// socket -- minos cuenta "processedBytes"/Reenvio solo sobre mensajes de CONTENIDO
+	// (application.yml:msgSumanBytes en el repo mki: Cargos=24, AcuseRecibo=27,
+	// LiquidacionFinal=51, entre otros que este simulador no manda), nunca sobre el handshake
+	// (Greeting/SmLoginReq/EnSesion/ClvSim/MsjCatalogos). Reenviar el handshake hacía que minos
+	// reprocesara EnSesion/MsjCatalogos a mitad de sesión viva (reset de claves AES, otro Reenvio
+	// en bucle) -- veía códigos de operación corruptos y terminaba en Connection reset. Por eso ya
+	// no se envuelve el OutputStream genérico (ver run()) -- se anota explícito en cada sitio de
+	// envío que SÍ cuenta, ver OPCODES_CUENTAN_PARA_REENVIO abajo.
 	private final SentHistory sentHistory = new SentHistory();
+
+	/** Códigos de operación que SÍ cuentan para el historial de Reenvio -- subconjunto de
+	 *  {@code msgSumanBytes} (mki/minos, application.yml) que este simulador realmente manda. */
+	private static final java.util.Set<Integer> OPCODES_CUENTAN_PARA_REENVIO = java.util.Set.of(
+			SpeiProtocol.OP_CARGOS, SpeiProtocol.OP_ACUSERECIBO, SpeiProtocol.OP_LIQUIDACIONFINAL,
+			SpeiProtocol.OP_ABONOS);
 
 	private DataOutputStream out;
 	private byte[] sessionKey;
@@ -170,13 +184,8 @@ public final class SpeiSession implements Runnable {
 				// variación de tipo "throttling" cambia la tasa del TokenBucket compartido.
 				DataInputStream in = new DataInputStream(
 						new ThrottledInputStream(socket.getInputStream(), redVariacionRegistry.limiteEntrada()));
-				// Spec 003: RecordingOutputStream va entre DataOutputStream y ThrottledOutputStream para
-				// que el historial refleje exactamente los bytes que salen por el socket, en el mismo
-				// orden, sin que el throttling (spec 005) afecte qué queda registrado -- ver SentHistory.
 				DataOutputStream dataOut = new DataOutputStream(
-						new RecordingOutputStream(
-								new ThrottledOutputStream(socket.getOutputStream(), redVariacionRegistry.limiteSalida()),
-								sentHistory))) {
+						new ThrottledOutputStream(socket.getOutputStream(), redVariacionRegistry.limiteSalida()))) {
 			this.out = dataOut;
 			logger.info("[SPEI] Conexión entrante de {}", socket.getRemoteSocketAddress());
 
@@ -452,12 +461,12 @@ public final class SpeiSession implements Runnable {
 
 	/**
 	 * Spec 003 -- reenvío real: {@code processedBytes} es una posición absoluta en el historial de
-	 * bytes que este simulador ha mandado en la sesión (ver {@link SentHistory}); si todavía hay
-	 * algo después de esa posición, se reenvía tal cual (mismos bytes, sin re-cifrar ni re-firmar
-	 * -- ver la nota de diseño en {@link SentHistory}) antes de responder {@code FinReenvio}. El
-	 * reenvío se manda por {@code out} igual que cualquier otro envío, así que también pasa por
-	 * {@code RecordingOutputStream} y queda registrado en el historial (correcto: ese reenvío
-	 * también son bytes que el simulador mandó en la sesión).
+	 * bytes de CONTENIDO (ver {@link #OPCODES_CUENTAN_PARA_REENVIO} y {@link SentHistory}) que
+	 * este simulador ha mandado en la sesión -- NO incluye el handshake (corregido 2026-10-08, ver
+	 * la nota de {@link #sentHistory}). Si todavía hay algo después de esa posición, se reenvía tal
+	 * cual (mismos bytes, sin re-cifrar ni re-firmar) antes de responder {@code FinReenvio}. El
+	 * reenvío en sí no se vuelve a anotar en el historial (serían los mismos bytes contados dos
+	 * veces).
 	 */
 	private void handleReenvio(Frame frame) throws Exception {
 		byte[] plaintext = AesCipher.decrypt(frame.body(), sessionKey, sessionIv);
@@ -647,7 +656,10 @@ public final class SpeiSession implements Runnable {
 				identity.privateKey(), sessionKey, sessionIv, config.maxMessageLength());
 		synchronized (writeLock) {
 			for (byte[] frameBody : frames) {
-				Frame.of(SpeiProtocol.OP_CARGOS, frameBody).writeTo(out);
+				Frame frame = Frame.of(SpeiProtocol.OP_CARGOS, frameBody);
+				frame.writeTo(out);
+				byte[] bytes = frame.toBytes();
+				sentHistory.append(bytes, 0, bytes.length);
 			}
 		}
 		String detalle = "folio=" + folio + " entradas=" + entries.size() + " monto=" + montoTotal
@@ -673,7 +685,10 @@ public final class SpeiSession implements Runnable {
 				config.ownEntityIndex(), config.ownEntityCode(), montoFinal);
 		byte[] body = WireFraming.encryptSession(payload, sessionKey, sessionIv);
 		synchronized (writeLock) {
-			Frame.of(SpeiProtocol.OP_LIQUIDACIONFINAL, body).writeTo(out);
+			Frame frame = Frame.of(SpeiProtocol.OP_LIQUIDACIONFINAL, body);
+			frame.writeTo(out);
+			byte[] bytes = frame.toBytes();
+			sentHistory.append(bytes, 0, bytes.length);
 		}
 		store.logEvent(runId, "OUT", "LiquidacionFinal", SpeiProtocol.OP_LIQUIDACIONFINAL, "enviado",
 				"montoFinal=" + montoFinal, body);
@@ -770,11 +785,17 @@ public final class SpeiSession implements Runnable {
 		}
 		synchronized (writeLock) {
 			for (byte[] frameBody : frames) {
-				Frame.of(SpeiProtocol.OP_ABONOS, frameBody).writeTo(out);
+				Frame frame = Frame.of(SpeiProtocol.OP_ABONOS, frameBody);
+				frame.writeTo(out);
+				byte[] bytes = frame.toBytes();
+				sentHistory.append(bytes, 0, bytes.length);
 			}
 			if (decision.duplicar()) {
 				for (byte[] frameBody : frames) {
-					Frame.of(SpeiProtocol.OP_ABONOS, frameBody).writeTo(out);
+					Frame frame = Frame.of(SpeiProtocol.OP_ABONOS, frameBody);
+					frame.writeTo(out);
+					byte[] bytes = frame.toBytes();
+					sentHistory.append(bytes, 0, bytes.length);
 				}
 			}
 		}
@@ -800,10 +821,19 @@ public final class SpeiSession implements Runnable {
 		if (decision.retrasoMs() > 0) {
 			Thread.sleep(decision.retrasoMs());
 		}
+		boolean cuenta = OPCODES_CUENTAN_PARA_REENVIO.contains(frame.operation());
 		synchronized (writeLock) {
 			frame.writeTo(out);
+			if (cuenta) {
+				byte[] bytes = frame.toBytes();
+				sentHistory.append(bytes, 0, bytes.length);
+			}
 			if (decision.duplicar()) {
 				frame.writeTo(out);
+				if (cuenta) {
+					byte[] bytes = frame.toBytes();
+					sentHistory.append(bytes, 0, bytes.length);
+				}
 			}
 		}
 		if (decision.cortarDespues()) {

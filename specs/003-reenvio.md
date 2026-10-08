@@ -78,14 +78,32 @@ Resueltas 2026-10-06 al construir el arnés de pruebas Java (ver "Estado de impl
 
 - `SentHistory` (`src/main/java/.../spei/SentHistory.java`) — historial de bytes mandados por
   sesión SPEI, acotado a 16 MiB con ventana deslizante (ver "Preguntas abiertas").
-- `RecordingOutputStream` (`src/main/java/.../spei/RecordingOutputStream.java`) — intercepta cada
-  byte que sale por el socket SPEI y lo anota en `SentHistory`, colocado entre `DataOutputStream`
-  y `ThrottledOutputStream` (spec 005) en `SpeiSession.run()`.
 - `SpeiSession.handleReenvio` reescrito: calcula el offset faltante contra `SentHistory` y, si hay
   algo pendiente, lo reenvía tal cual (mismos bytes, dentro de `writeLock`) antes de responder
-  `FinReenvio` — en vez de responder `FinReenvio` vacío de inmediato como antes. El reenvío mismo
-  también pasa por `RecordingOutputStream`, así que queda registrado en el historial (correcto: un
-  reenvío también son bytes que el simulador mandó en la sesión).
+  `FinReenvio` — en vez de responder `FinReenvio` vacío de inmediato como antes.
+
+**Corregido 2026-10-08 — regresión real encontrada contra minosA, `RecordingOutputStream`
+retirado:** el diseño original grababa en `SentHistory` *todo* lo que salía por el socket,
+incluido el handshake (`Greeting`/`SmLoginReq`/`EnSesion`/`ClvSim`/`MsjCatalogos`). Verificado
+contra el código real de minos (`application.yml:msgSumanBytes`, repo `mki`): minos manda un
+`Reenvio(processedBytes=0)` automático e incondicional justo después de procesar `MsjCatalogos`
+(cada sesión, no solo cuando sospecha pérdida de datos), y su contador de bytes **excluye
+explícitamente los 5 códigos de handshake** — solo cuenta mensajes de contenido (`Cargos=24`,
+`Abonos=25`, `AcuseRecibo=27`, `LiquidacionFinal=51`, entre otros que este simulador no manda). Al
+reenviar el handshake completo, minos lo reprocesaba como si fuera tráfico nuevo a mitad de una
+sesión ya viva (`EnSesionMessageHandler` resetea las llaves AES de sesión, `MsjCatalogosMessageHandler`
+dispara otro `Reenvio` en bucle) — esto producía códigos de operación corruptos y terminaba en
+`Connection reset`, rompiendo **toda reconexión real** hasta corregirse.
+
+Fix: se retiró `RecordingOutputStream` (ya no envuelve el `OutputStream` genérico en
+`SpeiSession.run()`); en su lugar, cada sitio de envío que sí cuenta (`AcuseRecibo` vía
+`sendConVariacion`, `Cargos`, `LiquidacionFinal`, `Abonos`) anota explícitamente en `SentHistory`
+solo si su opcode está en `SpeiSession.OPCODES_CUENTAN_PARA_REENVIO` (el subconjunto real de
+`msgSumanBytes` que este simulador implementa). El reenvío en sí no se vuelve a anotar (serían los
+mismos bytes contados dos veces). `FakeMinosClient`/`ReenvioAcceptanceTest` se actualizaron para
+armar los puntos de corte sobre Abonos reales (disparados vía la API de control), no sobre el
+handshake -- el arnés original nunca hubiera detectado esta regresión porque no existía ningún
+mensaje de contenido en su escenario, solo handshake.
 - `ReenvioCodec.buildReenvioBody`/`parseFinReenvio` y `ClvSimCodec.parse`/`buildRespClvSimBody` y
   `AraWireFraming.parsePaddedSignedBody` y `RsaCipher.decryptOaepSha512`/`decryptOaepSha512FromBase64`
   — codecs/utilidades "de salida" que faltaban porque antes nadie necesitaba jugar el papel de

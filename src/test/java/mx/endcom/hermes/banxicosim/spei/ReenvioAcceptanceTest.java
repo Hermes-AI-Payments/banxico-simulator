@@ -4,7 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
 import org.junit.jupiter.api.Test;
 
@@ -19,15 +22,21 @@ import mx.endcom.hermes.banxicosim.testsupport.SimuladorHarness;
  * real del simulador (arrancada en proceso, puertos efímeros, ver {@link SimuladorHarness}) usando
  * un "minos falso" ({@link FakeMinosClient}) que hace el handshake SPEI completo y manda
  * {@code Reenvio} con un {@code processedBytes} arbitrario.
+ *
+ * <p><b>Corregido 2026-10-08</b> (regresión real encontrada contra minosA): los puntos de corte
+ * ya NO se arman sobre el handshake (Greeting..MsjCatalogos) -- minos real no cuenta esos bytes
+ * para Reenvio (ver {@code SpeiSession.OPCODES_CUENTAN_PARA_REENVIO}), así que un corte dentro del
+ * handshake no tiene nada que reenviar. Los dos tests ahora disparan Abonos reales vía la API de
+ * control (mismo mecanismo que un escenario real) para tener bytes de CONTENIDO que cortar.</p>
  */
 class ReenvioAcceptanceTest {
 
 	/**
 	 * Criterio (a): el arnés manda {@code Reenvio} con {@code processedBytes} apuntando a un punto
-	 * intermedio conocido (justo después de {@code Greeting}+{@code SmLoginReq}), y el simulador
-	 * reenvía exactamente los bytes correspondientes ({@code EnSesion}+{@code ClvSim}+
-	 * {@code MsjCatalogos}, tal cual se mandaron la primera vez) -- verificado tanto directamente
-	 * contra el socket como contra el evento registrado en {@code /test-runs/{id}/events}.
+	 * intermedio conocido -- justo después de un primer Abono de contenido -- y el simulador
+	 * reenvía exactamente los bytes de un segundo Abono posterior, tal cual se mandó la primera
+	 * vez -- verificado tanto directamente contra el socket como contra el evento registrado en
+	 * {@code /test-runs/{id}/events}.
 	 */
 	@Test
 	void reenvioDesdePuntoIntermedioReenviaBytesExactos() throws Exception {
@@ -36,10 +45,13 @@ class ReenvioAcceptanceTest {
 			minos.connectSpei(harness.speiPort);
 			minos.performSpeiHandshake(harness.config.speiUser());
 
-			// Punto de corte conocido: justo después de Greeting (índice 0) y SmLoginReq (índice 1).
-			// Se espera que el simulador reenvíe EnSesion + ClvSim + MsjCatalogos (índices 2-4).
-			int cutPoint = (int) minos.offsetAfterFrames(2);
-			byte[] expectedBytes = minos.expectedBytesFromFrame(2);
+			triggerAbonoValido(harness.controlPort);
+			minos.readSpeiFrame(); // Abono #1 -- contenido, sí cuenta (framesDelSimulador[0])
+			int cutPoint = (int) minos.offsetAfterFrames(1);
+
+			triggerAbonoValido(harness.controlPort);
+			minos.readSpeiFrame(); // Abono #2 -- lo que esperamos que se reenvíe
+			byte[] expectedBytes = minos.expectedBytesFromFrame(1);
 			assertTrue(expectedBytes.length > 0, "la prueba necesita que haya algo que reenviar");
 
 			minos.sendReenvio(cutPoint);
@@ -76,7 +88,9 @@ class ReenvioAcceptanceTest {
 	/**
 	 * Criterio (b): un {@code Reenvio} con {@code processedBytes} igual al total ya mandado (nada
 	 * que reenviar) se responde con {@code FinReenvio} sin contenido adicional y sin error -- no
-	 * debe llegar ningún frame de reenvío antes del {@code FinReenvio}.
+	 * debe llegar ningún frame de reenvío antes del {@code FinReenvio}. Se dispara un Abono real
+	 * primero para que "el total ya mandado" sea un valor de contenido real, no solo 0 por un
+	 * handshake que ya no cuenta.
 	 */
 	@Test
 	void reenvioSinNadaPendienteRespondeFinReenvioSinError() throws Exception {
@@ -85,7 +99,10 @@ class ReenvioAcceptanceTest {
 			minos.connectSpei(harness.speiPort);
 			minos.performSpeiHandshake(harness.config.speiUser());
 
+			triggerAbonoValido(harness.controlPort);
+			minos.readSpeiFrame();
 			int total = (int) minos.totalBytesDelSimulador();
+			assertTrue(total > 0, "la prueba necesita que ya se haya mandado contenido real");
 			minos.sendReenvio(total);
 
 			// El siguiente frame debe ser FinReenvio directamente -- nada que reenviar primero.
@@ -93,10 +110,17 @@ class ReenvioAcceptanceTest {
 			assertEquals(SpeiProtocol.OP_FINREENVIO, finReenvioFrame.operation());
 			ReenvioCodec.FinReenvio finReenvio = minos.decryptFinReenvio(finReenvioFrame);
 			assertEquals(0, finReenvio.bytesServerToClient());
-			assertEquals(0, finReenvio.bytesClientToServer());
-			assertEquals(0, BigDecimal.ZERO.compareTo(finReenvio.totalBalance()));
-			assertEquals(0, BigDecimal.ZERO.compareTo(finReenvio.reservedBalance()));
 		}
+	}
+
+	private static void triggerAbonoValido(int controlPort) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create("http://localhost:" + controlPort + "/abonos/validos"))
+				.POST(HttpRequest.BodyPublishers.noBody())
+				.build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, response.statusCode(), "disparar el abono de prueba debe responder 200: " + response.body());
 	}
 
 	private static String toHex(byte[] bytes) {

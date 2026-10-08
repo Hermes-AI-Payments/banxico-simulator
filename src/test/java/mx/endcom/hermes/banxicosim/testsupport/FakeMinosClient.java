@@ -46,10 +46,21 @@ public final class FakeMinosClient implements AutoCloseable {
 	private DataOutputStream speiOut;
 	private byte[] sessionKey;
 	private byte[] sessionIv;
-	/** Bytes exactos (header + cuerpo) de cada frame mandado por el simulador durante el handshake
-	 *  SPEI, en el orden en que se recibieron -- reconstruye el mismo historial que
-	 *  {@code SentHistory} lleva del lado del simulador, para poder calcular posiciones de corte
-	 *  conocidas y comparar el reenvío byte a byte (spec 003). */
+	/** Mismo subconjunto que {@code SpeiSession.OPCODES_CUENTAN_PARA_REENVIO} -- corregido
+	 *  2026-10-08: minos real NO cuenta el handshake para {@code Reenvio} (ver
+	 *  {@code application.yml:msgSumanBytes} en el repo mki), solo mensajes de contenido. Duplicado
+	 *  aquí (no se puede importar el privado de {@code SpeiSession}) para que el arnés reconstruya
+	 *  el mismo historial que el simulador realmente lleva. */
+	private static final java.util.Set<Integer> OPCODES_CUENTAN_PARA_REENVIO = java.util.Set.of(
+			SpeiProtocol.OP_CARGOS, SpeiProtocol.OP_ACUSERECIBO, SpeiProtocol.OP_LIQUIDACIONFINAL,
+			SpeiProtocol.OP_ABONOS);
+
+	/** Bytes exactos (header + cuerpo) de cada frame de CONTENIDO mandado por el simulador (ver
+	 *  {@link #OPCODES_CUENTAN_PARA_REENVIO}), en el orden en que se recibieron -- reconstruye el
+	 *  mismo historial que {@code SentHistory} lleva del lado del simulador, para poder calcular
+	 *  posiciones de corte conocidas y comparar el reenvío byte a byte (spec 003). El handshake
+	 *  (Greeting..MsjCatalogos) se lee igual mediante {@link #readSpeiFrame()} pero no se agrega
+	 *  aquí -- no cuenta para Reenvio real. */
 	private final List<byte[]> framesDelSimulador = new ArrayList<>();
 
 	private Socket araSocket;
@@ -159,15 +170,16 @@ public final class FakeMinosClient implements AutoCloseable {
 		Frame.of(SpeiProtocol.OP_REENVIO, cipher).writeTo(speiOut);
 	}
 
-	/** Lee el siguiente frame crudo del socket SPEI -- se usa tanto durante el handshake como
-	 *  después de {@link #sendReenvio} para leer los bytes reenviados (si los hay) y el
-	 *  {@code FinReenvio} final. Cada frame leído se agrega a {@link #framesDelSimulador}: un
-	 *  reenvío real repite bytes ya vistos, y eso es exactamente lo que también le pasa al
-	 *  historial del lado del simulador (ver {@code SentHistory} -- un reenvío también cuenta como
-	 *  "bytes mandados"), así que ambos lados se mantienen en sincronía. */
+	/** Lee el siguiente frame crudo del socket SPEI -- se usa durante el handshake, para leer
+	 *  frames de contenido (p.ej. tras disparar un Abono por la API de control), y después de
+	 *  {@link #sendReenvio} para leer los bytes reenviados (si los hay) y el {@code FinReenvio}
+	 *  final. Solo se agrega a {@link #framesDelSimulador} si el opcode cuenta para Reenvio (ver
+	 *  {@link #OPCODES_CUENTAN_PARA_REENVIO}) -- el handshake se lee igual pero no se cuenta. */
 	public Frame readSpeiFrame() throws Exception {
 		Frame frame = Frame.read(speiIn);
-		framesDelSimulador.add(frame.toBytes());
+		if (OPCODES_CUENTAN_PARA_REENVIO.contains(frame.operation())) {
+			framesDelSimulador.add(frame.toBytes());
+		}
 		return frame;
 	}
 
