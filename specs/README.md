@@ -36,7 +36,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [011](011-mcp.md) | Integración MCP sobre la API de control; MCP junto a la API y plugin | Implementado y desplegado, confirmado en vivo (2026-10-06) |
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
 | [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado y confirmado en host (2026-10-06) |
-| [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Primer ciclo completo (OrdenTopoV→AcuseRecibo→Cargos) confirmado contra minosa real; faltan escenarios de rechazo (2026-10-05) |
+| [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Completa y verificada contra minosA real (2026-10-08): motivos 14/15/30, rechazo forzado, modo acumulado, saldo y Cargos sobreviviendo reconexión. Motivos 16/17 documentados como inalcanzables por diseño (catálogo externo vacío por defecto) |
 | [015](015-trazabilidad-cruzada.md) | Trazabilidad cruzada de una orden/pago (línea de tiempo Core falso↔Judeca↔simulador) | Herramienta de línea de tiempo (`.claude/skills/spei-trazabilidad-pago`) verificada con datos reales; falta solo el artefacto HTML para compartir (2026-10-06) |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las

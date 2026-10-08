@@ -310,9 +310,14 @@ intentaron adivinar. Pendiente de retomar con esas credenciales o con Pedro dire
       (`processCargosMessage`) y/o `GET /minos/radamanto/getVariables` (`balance` actualizado).
       **Confirmado 2026-10-05 contra minosa real** — folioPack=2, monto=100.00, balance
       1,000,000.00 → 1,000,100.00.
-- [ ] En modo `acumulado`, las órdenes aceptadas NO generan `Cargos` hasta
+- [x] En modo `acumulado`, las órdenes aceptadas NO generan `Cargos` hasta
       `POST /pagos/cargos/liquidar-lote`, que manda uno solo con todas las pendientes del día —
-      y lo pendiente sobrevive una reconexión de la sesión SPEI antes de liquidarlo.
+      y lo pendiente sobrevive una reconexión de la sesión SPEI antes de liquidarlo. **Confirmado
+      2026-10-08 contra minosA real** (`cargos.modoLiquidacion=acumulado` temporal en `.200`):
+      orden de $55.00 aceptada sin Cargos automático, saldo sin cambios, pendiente visible en
+      `/pagos/cargos/pendientes`; sobrevivió un reinicio+reconexión real; `liquidar-lote` mandó un
+      solo `Cargos` por los $55.00, saldo actualizado, pendientes vacío después. Config regresada a
+      `inmediato` (el default) al terminar, para no dejar el laboratorio en un modo distinto.
 - [x] El saldo (`GET /pagos/saldo`) sobrevive una reconexión de la sesión SPEI dentro del mismo día
       operativo (no se reinicia a los valores por defecto). **Confirmado 2026-10-08 contra minosA
       real**: $1,000,033.00 antes y después de reiniciar el contenedor y reconectar.
@@ -321,5 +326,6 @@ intentaron adivinar. Pendiente de retomar con esas credenciales o con Pedro dire
       **Confirmado 2026-10-05 contra minosa real** (antes del fix de certificado, no debería
       cambiar) — minos reconectó ARA exitosamente y Radamanto respondió "Mensaje de inicio de
       cambio de dia recibido"; también resolvió un día operativo atorado 3 días (2 oct → 5 oct).
-- [ ] Todo lo anterior compilado y, antes de mergear a `main`, verificado contra minos real
-      (misma disciplina que specs 001/005/012 — ver `minos_wire_protocol_verification`).
+- [x] Todo lo anterior compilado y, antes de mergear a `main`, verificado contra minos real
+      (misma disciplina que specs 001/005/012 — ver `minos_wire_protocol_verification`). **Spec 014
+      completa, 2026-10-08.**
