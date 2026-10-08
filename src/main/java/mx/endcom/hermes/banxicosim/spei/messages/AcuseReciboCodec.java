@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import mx.endcom.hermes.banxicosim.wire.ByteReader;
 import mx.endcom.hermes.banxicosim.wire.ByteWriter;
 
 /**
@@ -57,5 +58,35 @@ public final class AcuseReciboCodec {
 			w.writeChar(e.errorCode());
 		}
 		return w.toByteArray();
+	}
+
+	public record Parsed(int folioPack, char status, List<OrderError> errors) {
+	}
+
+	/**
+	 * Inverso de {@link #buildBody}, para el arnés de pruebas ({@code FakeMinosClient}) -- el
+	 * simulador real nunca lo necesita (solo construye este mensaje, nunca lo recibe). Se le pasa
+	 * el cuerpo YA SIN el prefijo de 2 bytes de {@link mx.endcom.hermes.banxicosim.spei.WireFraming#withLengthPrefix}
+	 * (plano, sin cifrar -- ver la nota de esa clase: AcuseRecibo no usa AES).
+	 */
+	public static Parsed parse(byte[] body) {
+		ByteReader r = new ByteReader(body);
+		r.readDateTime(); // serverTimestamp, no se usa en la prueba
+		r.readDate(); // operationDate
+		int folio = r.readIntBE();
+		r.readChar(); // entityIndex
+		r.readIntBE(); // entityCode
+		r.readIntBE(); // instructionFolio
+		char status = r.readChar();
+		int totalErrors = r.readIntBE();
+		short[] folios = new short[totalErrors];
+		for (int i = 0; i < totalErrors; i++) {
+			folios[i] = r.readShortBE();
+		}
+		java.util.List<OrderError> errors = new java.util.ArrayList<>(totalErrors);
+		for (int i = 0; i < totalErrors; i++) {
+			errors.add(new OrderError(folios[i], r.readChar()));
+		}
+		return new Parsed(folio, status, errors);
 	}
 }

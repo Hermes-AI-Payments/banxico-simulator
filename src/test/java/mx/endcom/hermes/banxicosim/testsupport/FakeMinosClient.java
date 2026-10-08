@@ -162,6 +162,23 @@ public final class FakeMinosClient implements AutoCloseable {
 		return result;
 	}
 
+	/** Manda un {@code OrdenTopoV} real (minos -&gt; simulador), firmado con la identidad propia de
+	 *  este cliente -- para los escenarios de recepción/rechazo de spec 014 que no dependen de
+	 *  Judeca (p.ej. clave de rastreo duplicada, que Judeca ya intercepta antes de llegar a minos
+	 *  en el flujo real -- ver conversación 2026-10-08). Un solo frame, sin partición (payloads de
+	 *  prueba pequeños). */
+	public void sendOrdenTopoV(java.time.LocalDate operationDate, int entityCode, int receptorEntityCode,
+			int folioPack, java.util.List<mx.endcom.hermes.banxicosim.spei.messages.OrdenTopoVCodec.Order> orders)
+			throws Exception {
+		byte[] payload = mx.endcom.hermes.banxicosim.spei.messages.OrdenTopoVCodec.buildPayload(
+				LocalDateTime.now(), operationDate, /* entityIndex */ 2, entityCode,
+				/* receptorEntityIndex */ 1, receptorEntityCode, folioPack,
+				/* certificateIndex */ 1, /* priority */ false, orders);
+		byte[] body = mx.endcom.hermes.banxicosim.spei.WireFraming.buildEncryptedSignedPartitioned(
+				payload, fakeMinos.privateKey(), sessionKey, sessionIv);
+		Frame.of(SpeiProtocol.OP_ORDEN_TOPOV, body).writeTo(speiOut);
+	}
+
 	/** Manda {@code Reenvio} (spec 003) con el {@code processedBytes} dado -- cifrado AES de
 	 *  sesión simple, sin particionar ni firmar (ver {@code ReenvioCodec}). */
 	public void sendReenvio(int processedBytes) throws Exception {
@@ -181,6 +198,18 @@ public final class FakeMinosClient implements AutoCloseable {
 			framesDelSimulador.add(frame.toBytes());
 		}
 		return frame;
+	}
+
+	/** Parsea un {@code AcuseRecibo} -- plano, sin AES (ver {@code WireFraming.withLengthPrefix}),
+	 *  solo con el prefijo de tamaño de 2 bytes que hay que saltar antes del cuerpo real. */
+	public mx.endcom.hermes.banxicosim.spei.messages.AcuseReciboCodec.Parsed parseAcuseRecibo(Frame frame) {
+		if (frame.operation() != SpeiProtocol.OP_ACUSERECIBO) {
+			throw new IllegalStateException("Se esperaba AcuseRecibo (" + SpeiProtocol.OP_ACUSERECIBO
+					+ "), llegó " + frame.operation());
+		}
+		byte[] body = frame.body();
+		byte[] sinPrefijo = java.util.Arrays.copyOfRange(body, 2, body.length);
+		return mx.endcom.hermes.banxicosim.spei.messages.AcuseReciboCodec.parse(sinPrefijo);
 	}
 
 	public ReenvioCodec.FinReenvio decryptFinReenvio(Frame finReenvioFrame) throws Exception {

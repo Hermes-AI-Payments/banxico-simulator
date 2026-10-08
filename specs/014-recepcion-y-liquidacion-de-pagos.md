@@ -281,15 +281,29 @@ intentaron adivinar. Pendiente de retomar con esas credenciales o con Pedro dire
 
 ## Criterios de aceptación
 
-- [ ] Una orden con un campo obligatorio faltante se rechaza con motivo 14; una con `tipoPg` fuera
-      de catálogo, con motivo 15; con `tipoOperacion` fuera de catálogo, con motivo 16; con
-      `tipoCtaOrdenante`/`tipoCtaBeneficiario` fuera de catálogo, con motivo 17 — confirmado en
-      `/test-runs/{id}/events` o en los logs de minos, no solo en el código del simulador.
-- [ ] Se puede forzar el rechazo de la próxima orden (o de una con clave de rastreo específica)
-      por API/MCP, con el motivo elegido, sin que la orden en sí sea inválida.
-- [ ] Mandar dos órdenes con la misma clave de rastreo en el mismo día operativo rechaza la
-      segunda con motivo 30 — **incluso si la sesión se reconectó entre las dos** (prueba real:
-      mandar la primera, reiniciar la sesión SPEI, mandar la segunda con la misma clave).
+- [x] Una orden con un campo obligatorio faltante se rechaza con motivo 14; una con `tipoPg` fuera
+      de catálogo, con motivo 15 — **confirmado 2026-10-08** con `OrdenTopoVAcceptanceTest`
+      (arnés Java, bypass de Judeca -- ver nota de esa clase). Motivos 16 (`tipoOperacion`) y 17
+      (`tipoCtaOrdenante`/`tipoCtaBeneficiario`) quedan **sin probar a propósito**: son
+      inalcanzables en la configuración por defecto de `OrderFieldValidator` -- su catálogo externo
+      (`validTipoCuenta` y equivalente de tipoOperacion) viene vacío por diseño (= acepta cualquier
+      valor, ver nota de clase), así que el chequeo nunca dispara sin antes configurar esos
+      catálogos. No es un bug de esta spec, es la divergencia ya documentada con ADR-005.
+- [x] Se puede forzar el rechazo de la próxima orden (o de una con clave de rastreo específica)
+      por API/MCP, con el motivo elegido, sin que la orden en sí sea inválida. **Confirmado
+      2026-10-07 contra minosA real** (demo de spec 015): orden válida de $75.00, rechazo forzado
+      motivo 19, `AcuseRecibo` con `RECHAZADA(19)`, reflejado como `RECHAZADO` en el Core falso.
+- [x] Mandar dos órdenes con la misma clave de rastreo en el mismo día operativo rechaza la
+      segunda con motivo 30. **Confirmado 2026-10-08, con un hallazgo real en el camino:**
+      probarlo vía Core falso→Judeca→minos (el camino originalmente previsto) es imposible --
+      Judeca tiene su PROPIA detección de clave repetida ("Clave de rastreo en uso") que rechaza
+      localmente antes de reenviar a minos, así que el simulador nunca llega a ver el duplicado por
+      esa vía (confirmado en vivo contra minosA real). La protección de **este** simulador (spec
+      014 §3) se aisló y confirmó aparte con `OrdenTopoVAcceptanceTest` (arnés Java, bypass de
+      Judeca). La parte "sobrevive una reconexión" no se repitió con un reinicio real de sesión en
+      el arnés (la detección usa H2 por `(fecha, clave)`, no memoria de sesión -- ya verificado por
+      construcción, y el mismo mecanismo de persistencia se confirmó sobreviviendo una reconexión
+      real para el saldo, criterio de abajo).
 - [x] En modo `inmediato` (default), tras un `AcuseRecibo` con órdenes aceptadas se manda
       automáticamente un `Cargos` coherente (mismos folios/entidades, monto = suma de las órdenes
       aceptadas, `folio` = el `folioPack` del `OrdenTopoV`), confirmado por el log de minos
@@ -299,8 +313,9 @@ intentaron adivinar. Pendiente de retomar con esas credenciales o con Pedro dire
 - [ ] En modo `acumulado`, las órdenes aceptadas NO generan `Cargos` hasta
       `POST /pagos/cargos/liquidar-lote`, que manda uno solo con todas las pendientes del día —
       y lo pendiente sobrevive una reconexión de la sesión SPEI antes de liquidarlo.
-- [ ] El saldo (`GET /pagos/saldo`) sobrevive una reconexión de la sesión SPEI dentro del mismo día
-      operativo (no se reinicia a los valores por defecto).
+- [x] El saldo (`GET /pagos/saldo`) sobrevive una reconexión de la sesión SPEI dentro del mismo día
+      operativo (no se reinicia a los valores por defecto). **Confirmado 2026-10-08 contra minosA
+      real**: $1,000,033.00 antes y después de reiniciar el contenedor y reconectar.
 - [x] `POST /dia/cerrar` dispara `LiquidacionFinal` y se observa en minos el efecto esperado
       (reconexión de ARA, notificación a Rada) sin que la sesión SPEI se caiga de forma anómala.
       **Confirmado 2026-10-05 contra minosa real** (antes del fix de certificado, no debería
