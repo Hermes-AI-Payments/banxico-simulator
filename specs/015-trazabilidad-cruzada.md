@@ -14,11 +14,10 @@ diagnóstico, no un cambio al protocolo real.
    de forma consistente en los logs de Judeca (`claveRastreo=X` en cada línea) y ahora también en
    los eventos propios del simulador (ver Requisito 1). Cero dependencias nuevas, funciona hoy.
 2. **Alinearse con la observabilidad que el equipo de Pedro ya está construyendo** (Graylog +
-   OpenSearch, visto en los commits recientes de `hermes-instalador`) — si el equipo decide
-   indexar `claveRastreo` como campo buscable ahí, la fuente de Judeca pasa de "SSH + grep" a "una
-   búsqueda en Graylog", menos frágil y sin necesitar acceso SSH. **Pendiente de confirmar con
-   Pedro** — se empieza por la opción 1 mientras tanto, diseñada para poder cambiar de fuente sin
-   rehacer el resto.
+   OpenSearch, visto en los commits recientes de `hermes-instalador`) — **confirmado 2026-10-09**:
+   acceso de solo-lectura otorgado, cubre todos los módulos (incluido Minos, que antes no
+   podíamos ver por ninguna otra vía). Se agrega como fuente nueva, no como reemplazo de Judeca
+   (ver "Preguntas abiertas" para el detalle completo de la decisión).
 
 ## Requisitos
 
@@ -65,10 +64,20 @@ diagnóstico, no un cambio al protocolo real.
 ## Preguntas abiertas
 
 - ¿Vale la pena que el Core falso agregue timestamps por transición de estado? Depende de la
-  respuesta de Pedro — no se resuelve aquí.
-- Si el equipo migra a Graylog, ¿la fuente de Judeca cambia a una consulta HTTP a su API de
-  búsqueda, o se sigue usando SSH como respaldo si Graylog no está disponible? Decidir cuando se
-  confirme que Graylog está realmente desplegado y accesible.
+  respuesta de Pedro — no se resuelve aquí, sigue abierta.
+
+**Cerrada 2026-10-09 — confirmado por el equipo de Pedro, con luz verde para usar su Graylog:**
+acceso de solo-lectura (token emitido para el usuario `miguel`, válido 90 días), vía
+`POST http://127.0.0.1:9000/api/views/search/messages` (devuelve CSV, campos `timestamp`/
+`modulo`/`evento`/`clave_rastreo`/`message`), alcanzable solo desde dentro de la VM `.52`, cubre
+**todos** los módulos (incluido Minos A/B/C) salvo los access logs de Tomcat, retención 10 días,
+`timestamp` es el valor UTC con precisión de milisegundos que cada app registra (no
+`gl2_receive_timestamp`, así que es comparable directo con las otras fuentes). Decisión: Graylog
+se agrega como **fuente nueva** (Minos/Estigia, que antes no teníamos forma de ver) — la fuente de
+Judeca **no se reemplaza**, sigue siendo SSH + `journalctl` porque ya es confiable y migrarla no
+aporta nada nuevo (ver `.claude/skills/spei-trazabilidad-pago/SKILL.md` §"Resuelto"). El campo
+`clave_rastreo` viene vacío para Minos/Estigia -- se busca por `message:"<clave>"` ahí, igual que
+ya hacíamos con Judeca.
 
 ## Criterios de aceptación
 
@@ -101,3 +110,11 @@ real (`folio=4 entradas=1 monto=88.00 balance=1000139.00 clavesRastreo=...`).
 
 **Requisito 3 (artefacto HTML para compartir) en progreso** -- la skill ya documenta que se hace
 solo si se pide explícitamente.
+
+**Fuente Graylog (Minos/Estigia) agregada el 2026-10-09:** `filas_minos_graylog` en
+`scripts/timeline.py` -- cuarta fuente, cubre el tramo que antes era invisible para esta
+herramienta (Minos A/B/C, Estigia). Token leído de `GRAYLOG_API_TOKEN` (variable de entorno local,
+nunca hardcodeado ni pasado por argumento) y transmitido al host `.52` por SSH vía stdin, nunca
+como argumento de proceso. Pendiente de una corrida real contra el laboratorio para confirmar en
+vivo el formato exacto de la respuesta CSV de Graylog (hecho contra la documentación de la API que
+compartió el equipo de Pedro, no contra una respuesta real todavía).

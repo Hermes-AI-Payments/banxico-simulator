@@ -26,7 +26,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [001](001-particionado-y-empaquetado.md) | Particionado y empaquetado configurable (B↔H) | En progreso |
 | [002](002-devoluciones.md) | Devoluciones (B↔H), alcance acotado al simulador | En progreso (B→H) |
 | [003](003-reenvio.md) | Reenvío real, solo el alcance de Banxico | Implementado (2026-10-06) |
-| [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | En progreso (B→H) |
+| [004](004-firmas-corruptas.md) | Escenarios de firma corrupta (ambos sentidos) | Completa y verificada (2026-10-09): H→B expuso y corrigió un bug real (firma de envoltura inválida se aceptaba, nunca se exigía); B→H confirmó contra minosA real que minos detecta la firma inválida pero no la rechaza (hallazgo a escalar, ver spec) |
 | [005](005-variaciones-de-red.md) | Variaciones de red simulables desde la API | Capa A completa y verificada contra minosA real (2026-10-06): corte, retraso, duplicación y throttling — este último encontró y corrigió un bug real (colgaba para siempre con mensajes grandes a tasas bajas), ya corregido y re-confirmado. Capa B (red real, host) no empezada |
 | [006](006-folio-duplicado.md) | Folio/clave de rastreo duplicado | Implementado |
 | [007](007-renovacion-certificado.md) | Renovación de certificado (`PideCrtNvo`) | Implementado (2026-10-06) |
@@ -37,7 +37,7 @@ herramienta de prueba misma**, que no existen en el protocolo SPEI real.
 | [012](012-pruebas-de-volumen.md) | Pruebas de volumen (tasa sostenida y búsqueda de techo) | En progreso |
 | [013](013-registro-de-cierre-de-sesion.md) | Registro de cierre de sesión | Implementado y confirmado en host (2026-10-06) |
 | [014](014-recepcion-y-liquidacion-de-pagos.md) | Recepción y liquidación de pagos: mapeo de motivos de rechazo, rechazo forzado, clave duplicada, `Cargos`, `LiquidacionFinal` | Completa y verificada contra minosA real (2026-10-08): motivos 14/15/30, rechazo forzado, modo acumulado, saldo y Cargos sobreviviendo reconexión. Motivos 16/17 documentados como inalcanzables por diseño (catálogo externo vacío por defecto) |
-| [015](015-trazabilidad-cruzada.md) | Trazabilidad cruzada de una orden/pago (línea de tiempo Core falso↔Judeca↔simulador) | Herramienta de línea de tiempo (`.claude/skills/spei-trazabilidad-pago`) verificada con datos reales; falta solo el artefacto HTML para compartir (2026-10-06) |
+| [015](015-trazabilidad-cruzada.md) | Trazabilidad cruzada de una orden/pago (línea de tiempo Core falso↔Judeca↔Minos/Estigia↔simulador) | Herramienta de línea de tiempo (`.claude/skills/spei-trazabilidad-pago`) verificada con datos reales; fuente Graylog (Minos/Estigia) agregada 2026-10-09, pendiente de probar en vivo; falta el artefacto HTML para compartir |
 
 **2026-09-21 — hallazgo que afecta 003/007 y la parte H→B de 004:** el "arnés Python" que las
 tres specs asumían poder extender **no existe en el repo** (`AGENTS.md` lo describe como

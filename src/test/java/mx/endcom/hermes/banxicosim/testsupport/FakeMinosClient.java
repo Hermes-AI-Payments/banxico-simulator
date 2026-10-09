@@ -179,6 +179,23 @@ public final class FakeMinosClient implements AutoCloseable {
 		Frame.of(SpeiProtocol.OP_ORDEN_TOPOV, body).writeTo(speiOut);
 	}
 
+	/** Como {@link #sendOrdenTopoV} pero con la firma de la envoltura corrupta (spec 004, H&rarr;B)
+	 *  -- mismo tamaño/codificación que una firma real, un byte alterado (ver
+	 *  {@code WireFraming.signedBlockCorrupto}). Para confirmar que el simulador la rechaza en vez
+	 *  de aceptarla o tronar con una excepción no manejada. */
+	public void sendOrdenTopoVConFirmaCorrupta(java.time.LocalDate operationDate, int entityCode,
+			int receptorEntityCode, int folioPack,
+			java.util.List<mx.endcom.hermes.banxicosim.spei.messages.OrdenTopoVCodec.Order> orders)
+			throws Exception {
+		byte[] payload = mx.endcom.hermes.banxicosim.spei.messages.OrdenTopoVCodec.buildPayload(
+				LocalDateTime.now(), operationDate, /* entityIndex */ 2, entityCode,
+				/* receptorEntityIndex */ 1, receptorEntityCode, folioPack,
+				/* certificateIndex */ 1, /* priority */ false, orders);
+		byte[] body = mx.endcom.hermes.banxicosim.spei.WireFraming.buildEncryptedSignedPartitionedCorrupto(
+				payload, fakeMinos.privateKey(), sessionKey, sessionIv);
+		Frame.of(SpeiProtocol.OP_ORDEN_TOPOV, body).writeTo(speiOut);
+	}
+
 	/** Manda {@code Reenvio} (spec 003) con el {@code processedBytes} dado -- cifrado AES de
 	 *  sesión simple, sin particionar ni firmar (ver {@code ReenvioCodec}). */
 	public void sendReenvio(int processedBytes) throws Exception {

@@ -1,6 +1,6 @@
 ---
 name: spei-trazabilidad-pago
-description: Arma una línea de tiempo cruzada de una orden/pago específica (Core falso → Judeca → este simulador), dada su clave de rastreo. Úsalo cuando el usuario pida "trazabilidad", "línea de tiempo de un pago/orden", "qué pasó con la clave de rastreo X", "en qué momento pasó por cada sistema", o quiera medir tiempos/latencias entre pasos de un pago de prueba (spec 015). Requiere VPN + acceso SSH al laboratorio -- NO es parte del plugin distribuido (spec 011 evita SSH a propósito), vive solo en este repo para quien tiene acceso directo.
+description: Arma una línea de tiempo cruzada de una orden/pago específica (Core falso → Judeca → Minos/Estigia vía Graylog → este simulador), dada su clave de rastreo. Úsalo cuando el usuario pida "trazabilidad", "línea de tiempo de un pago/orden", "qué pasó con la clave de rastreo X", "en qué momento pasó por cada sistema", o quiera medir tiempos/latencias entre pasos de un pago de prueba (spec 015). Requiere VPN + acceso SSH al laboratorio -- NO es parte del plugin distribuido (spec 011 evita SSH a propósito), vive solo en este repo para quien tiene acceso directo.
 allowed-tools: Bash
 ---
 
@@ -8,12 +8,14 @@ allowed-tools: Bash
 
 ## Qué hace y qué no
 
-Junta tres fuentes por clave de rastreo (`cveRastreo`) y las ordena en una sola línea de tiempo:
+Junta cuatro fuentes por clave de rastreo (`cveRastreo`) y las ordena en una sola línea de tiempo:
 
 1. **Judeca** (vía SSH + `journalctl`) -- el tramo más detallado, procesamiento interno paso a paso.
-2. **Este simulador** (`GET /test-runs/{id}/events`, ya filtrado por clave desde spec 015) -- cuándo
+2. **Minos/Estigia** (vía Graylog, confirmado por el equipo de Pedro 2026-10-09 -- ver "Fuente
+   Graylog" abajo) -- cubre Minos A/B/C y Estigia, todo salvo los access logs de Tomcat.
+3. **Este simulador** (`GET /test-runs/{id}/events`, ya filtrado por clave desde spec 015) -- cuándo
    llegó el `OrdenTopoV` y qué respondió el `AcuseRecibo`.
-3. **Core falso** (`GET /test/spei-out/list/payments-test/{testId}`, si se sabe el `testId`) -- solo
+4. **Core falso** (`GET /test/spei-out/list/payments-test/{testId}`, si se sabe el `testId`) -- solo
    el estado actual (`EN_COLA`/`ENVIADO`/`LIQUIDADO`/`DEVUELTO`), **sin** timestamp por transición
    (limitación real del Core falso, no de esta herramienta -- ver spec 015 "Fuera de alcance").
 
@@ -38,7 +40,26 @@ reciente con esa clave no siempre es el de la sesión activa).
 Flags para apuntar a otro laboratorio (todos tienen default para `.200`/`.52`):
 `--simulator-url`, `--core-falso-url`, `--judeca-ssh`, `--judeca-unidad` (cambia a
 `estigia.service`/`pluton.service`/`radamanto.service` para seguir otros tramos con el mismo
-patrón de columnas si Judeca no alcanza).
+patrón de columnas si Judeca no alcanza), `--graylog-ssh`, `--sin-graylog` (omite esa fuente si
+`GRAYLOG_API_TOKEN` todavía no está configurado).
+
+## Fuente Graylog (Minos/Estigia)
+
+Requiere la variable de entorno `GRAYLOG_API_TOKEN` (el token de solo-lectura que el equipo de
+Pedro emitió para el usuario `miguel`, válido 90 días) -- **nunca la pegues en el chat ni la pases
+como argumento del script**; expórtala en tu propia terminal antes de correrlo:
+
+```bash
+export GRAYLOG_API_TOKEN=<el token que te compartió Pedro>
+```
+
+El script la lee de ahí y la manda al host `.52` por el canal SSH (ya cifrado) vía stdin, nunca
+como argumento de proceso -- así no queda visible en `ps` del host remoto ni en el historial de
+shell local. Retención confirmada: 10 días. El campo `clave_rastreo` está indexado pero viene vacío
+para Minos y Estigia, así que ahí se busca por `message:"<clave>"` (igual que con Judeca). El
+`timestamp` que regresa Graylog es el valor UTC con precisión de milisegundos que la propia
+aplicación registró (no `gl2_receive_timestamp`), así que es comparable directamente con las horas
+de las otras tres fuentes.
 
 ## Cómo presentarlo
 
@@ -62,9 +83,11 @@ explícitamente ("el formato no coincidió con el patrón esperado") en vez de f
 si eso pasa, hay que actualizar `LINEA_JUDECA` en `scripts/timeline.py` contra una línea real
 nueva, no adivinar.
 
-## Pendiente (spec 015, preguntas abiertas)
+## Resuelto (spec 015, era "pendiente")
 
-Si el equipo de Pedro confirma que Graylog/OpenSearch ya indexa `claveRastreo` como campo
-buscable, la función `filas_judeca` de `scripts/timeline.py` debería cambiar su fuente de
-"SSH + journalctl" a una consulta HTTP a la API de búsqueda de Graylog -- menos frágil, sin
-necesitar SSH. No se ha confirmado todavía, por eso sigue en SSH por ahora.
+El equipo de Pedro confirmó (2026-10-09) acceso de solo-lectura a Graylog, cubriendo todos los
+módulos salvo Tomcat -- implementado como la cuarta fuente (`filas_minos_graylog`), ver arriba. La
+fuente de Judeca **sigue siendo SSH + `journalctl`** a propósito (no se reemplazó): Graylog cubre
+Minos/Estigia, que antes no teníamos forma de ver; Judeca ya teníamos un camino confiable y
+cambiarlo no aporta nada nuevo. Si en el futuro se decide consolidar también Judeca sobre Graylog,
+es un cambio aparte, no asumido aquí.

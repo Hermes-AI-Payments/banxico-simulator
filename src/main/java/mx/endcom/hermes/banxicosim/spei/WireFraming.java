@@ -52,6 +52,26 @@ public final class WireFraming {
 		return AesCipher.encrypt(plaintext, key, iv);
 	}
 
+	/** Como {@link #signedBlock} pero con la firma de la envoltura corrupta (spec 004, sentido
+	 *  H&rarr;B -- mismo criterio que {@code AbonosCodec.SignatureMode.CORRUPTA}: mismo tamaño y
+	 *  codificación que una firma real, un byte alterado). Solo para el arnés de pruebas (simular
+	 *  que "minos" manda una envoltura con firma inválida contra este simulador); el simulador
+	 *  nunca necesita producir esto en operación real. */
+	public static byte[] signedBlockCorrupto(byte[] payload, PrivateKey signingKey) throws Exception {
+		byte[] rawSignature = RsaCipher.signRSASSAPSS(payload, signingKey);
+		// Se voltea el último byte de la firma CRUDA, antes de Base64 -- igual que
+		// AbonosCodec#corrupt. Voltear un byte del texto Base64 ya codificado arriesga aterrizar en
+		// un caracter fuera del alfabeto Base64 (ej. '=' de relleno), que es una corrupción distinta
+		// (falla de decodificación, no de verificación de firma).
+		rawSignature[rawSignature.length - 1] ^= 0x01;
+		byte[] sigB64 = RsaCipher.encodeBase64(rawSignature);
+		return new ByteWriter()
+				.writeIntBE(sigB64.length)
+				.writeBytes(payload)
+				.writeBytes(sigB64)
+				.toByteArray();
+	}
+
 	/** Arma el cuerpo de un mensaje "particionado + cifrado" sin firma, tipo MsjCatalogos:
 	 *  cifra( [totalSize(2)] + payload ). Ver SpeiInputEncryptedPartitionedMessage (MsjCatalogosMessage
 	 *  extiende esta clase directamente, sin envoltura de firma, a diferencia de Abonos/OrdenTopoV). */
@@ -98,6 +118,15 @@ public final class WireFraming {
 	public static byte[] buildEncryptedSignedPartitioned(byte[] payload, PrivateKey signingKey,
 			byte[] sessionKey, byte[] sessionIv) throws Exception {
 		byte[] signedBlock = signedBlock(payload, signingKey);
+		byte[] withPrefix = withLengthPrefix(signedBlock);
+		return encryptSession(withPrefix, sessionKey, sessionIv);
+	}
+
+	/** Como {@link #buildEncryptedSignedPartitioned} pero con {@link #signedBlockCorrupto} --
+	 *  solo para el arnés de pruebas, spec 004 H&rarr;B. */
+	public static byte[] buildEncryptedSignedPartitionedCorrupto(byte[] payload, PrivateKey signingKey,
+			byte[] sessionKey, byte[] sessionIv) throws Exception {
+		byte[] signedBlock = signedBlockCorrupto(payload, signingKey);
 		byte[] withPrefix = withLengthPrefix(signedBlock);
 		return encryptSession(withPrefix, sessionKey, sessionIv);
 	}

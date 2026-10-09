@@ -545,6 +545,28 @@ public final class SpeiSession implements Runnable {
 		List<String> clavesAceptadasInmediato = new ArrayList<>();
 		BigDecimal montoAceptadoInmediato = BigDecimal.ZERO;
 		String modoLiquidacion = config.cargosModoLiquidacion();
+		// Spec 004 (H->B) -- hasta antes de esto, `unwrapped.signatureVerified()` solo se
+		// logueaba (líneas de arriba) pero nunca se exigía: una envoltura con firma inválida
+		// (formato correcto, contenido no verificable con la llave pública de minos) se procesaba
+		// exactamente igual que una válida, pudiendo ACEPTARSE -- hueco real, no solo "falta
+		// probarlo". El catálogo real de devoluciones no tiene un motivo específico para "firma
+		// inválida" (ver nota de clase de MotivoRechazo), así que se usa CARACTER_INVALIDO (19),
+		// el mismo fallback genérico que ya se usa para cualquier otro contenido no válido sin
+		// motivo propio. Si la envoltura no es auténtica, no se confía en NADA de su contenido --
+		// se rechazan todas las órdenes del folioPack sin correr rechazo forzado, clave duplicada
+		// ni OrderFieldValidator sobre ellas.
+		if (!unwrapped.signatureVerified()) {
+			logger.warn("[SPEI]   OrdenTopoV folioPack={}: firma de la envoltura inválida -- se "
+					+ "rechazan sus {} orden(es) sin procesar el contenido (motivo={})",
+					orden.folioPack(), orden.orders().size(), MotivoRechazo.CARACTER_INVALIDO.codigo());
+			for (OrdenTopoVCodec.Order order : orden.orders()) {
+				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(),
+						(char) MotivoRechazo.CARACTER_INVALIDO.codigo()));
+			}
+			finalizarOrdenTopoV(orden, errors, aceptadasInmediato, clavesAceptadasInmediato,
+					montoAceptadoInmediato);
+			return;
+		}
 		for (OrdenTopoVCodec.Order order : orden.orders()) {
 			RechazoForzado forzado = rechazoForzadoRegistry.activo()
 					.filter(r -> r.coincideCon(order.trackingKey()))
@@ -594,7 +616,16 @@ public final class SpeiSession implements Runnable {
 				errors.add(new AcuseReciboCodec.OrderError(order.internalFolio(), (char) motivo.codigo()));
 			}
 		}
+		finalizarOrdenTopoV(orden, errors, aceptadasInmediato, clavesAceptadasInmediato, montoAceptadoInmediato);
+	}
 
+	/** Arma y manda el {@code AcuseRecibo} de un {@code OrdenTopoV} ya resuelto (todas sus órdenes
+	 *  clasificadas en {@code errors} o aceptadas) y dispara el {@code Cargos} automático de modo
+	 *  inmediato si aplica -- común al camino normal de {@link #handleOrdenTopoV} y al rechazo
+	 *  total por firma de envoltura inválida (spec 004, H-&gt;B). */
+	private void finalizarOrdenTopoV(OrdenTopoVCodec.ParsedOrdenTopoV orden,
+			List<AcuseReciboCodec.OrderError> errors, List<CargosCodec.CargoEntry> aceptadasInmediato,
+			List<String> clavesAceptadasInmediato, BigDecimal montoAceptadoInmediato) throws Exception {
 		char status = errors.isEmpty() ? AcuseReciboCodec.STATUS_ACCEPTED : AcuseReciboCodec.STATUS_REJECTED;
 		byte[] acusePayload = AcuseReciboCodec.buildBody(
 				orden.operationDate(), orden.folioPack(), orden.entityIndex(), orden.entityCode(), status, errors);

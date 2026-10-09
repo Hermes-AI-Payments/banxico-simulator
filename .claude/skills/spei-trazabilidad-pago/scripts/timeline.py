@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Spec 015 -- línea de tiempo cruzada de una orden/pago por clave de rastreo.
 
-Junta tres fuentes (Core falso, Judeca, este simulador), ordena por hora y la imprime como tabla
-markdown en stdout -- pensado para que quien invoca este script (un agente de Claude Code) pegue
-la salida directo en el chat, no para generar un archivo. Ver ".claude/skills/spei-trazabilidad-
-pago/SKILL.md" para cuándo usarlo y cómo presentarlo.
+Junta cuatro fuentes (Core falso, Judeca, Minos/Estigia vía Graylog, este simulador), ordena por
+hora y la imprime como tabla markdown en stdout -- pensado para que quien invoca este script (un
+agente de Claude Code) pegue la salida directo en el chat, no para generar un archivo. Ver
+".claude/skills/spei-trazabilidad-pago/SKILL.md" para cuándo usarlo y cómo presentarlo.
 
 No falla si una fuente no responde o no tiene nada -- cada fuente es independiente, y la tabla
 final solo advierte qué fuente no se pudo consultar, no aborta el resto.
 """
 import argparse
+import csv
+import io
 import json
+import os
 import re
+import shlex
 import ssl
 import subprocess
 import sys
@@ -121,6 +125,62 @@ def filas_judeca(judeca_ssh, cve_rastreo, unidad, ssh_identity):
     return filas, None
 
 
+def filas_minos_graylog(graylog_ssh, cve_rastreo, dias_retencion, ssh_identity):
+    """Consulta Graylog por `clave_rastreo` -- cubre Minos A/B/C y Estigia (todo salvo los access
+    logs de Tomcat), confirmado por el equipo de Pedro el 2026-10-09 (ver specs/015 "Preguntas
+    abiertas", ahora cerradas). El campo `clave_rastreo` viene indexado pero vacío para Minos y
+    Estigia -- ahí se busca por `message:"<clave>"`, igual que con Judeca.
+
+    Se ejecuta por SSH *dentro* de la .52 (no hace falta túnel local: la API de Graylog solo es
+    alcanzable desde dentro de esa VM). El token nunca viaja por línea de comandos -- se lee
+    localmente de la variable de entorno GRAYLOG_API_TOKEN y se manda al host remoto por stdin del
+    túnel SSH (ya cifrado), nunca como argumento de un proceso que `ps` pudiera mostrar en la .52.
+    """
+    token = os.environ.get("GRAYLOG_API_TOKEN")
+    if not token:
+        return [], ("Minos/Estigia (Graylog): falta la variable de entorno GRAYLOG_API_TOKEN -- "
+                     "exporta el token que te dio el equipo de Pedro antes de correr esto "
+                     "(no lo pases por argumento ni lo pegues en el chat)")
+
+    query = f'clave_rastreo:"{cve_rastreo}" OR message:"{cve_rastreo}"'
+    body = json.dumps({
+        "query_string": {"type": "elasticsearch", "query_string": query},
+        "timerange": {"type": "relative", "range": dias_retencion * 86400},
+        "streams": [],
+        "fields_in_order": ["timestamp", "modulo", "evento", "clave_rastreo", "message"],
+    })
+    remote_cmd = (
+        "TOKEN=$(cat); curl -s -X POST http://127.0.0.1:9000/api/views/search/messages "
+        '-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" '
+        '-H "Accept: text/csv" -d ' + shlex.quote(body)
+    )
+    cmd = ["ssh"]
+    if ssh_identity:
+        cmd += ["-i", ssh_identity]
+    cmd += [graylog_ssh, remote_cmd]
+    try:
+        resultado = subprocess.run(cmd, input=token, capture_output=True, text=True, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        return [], f"Minos/Estigia (Graylog): no se pudo conectar por SSH a {graylog_ssh} ({e})"
+    if resultado.returncode != 0 or not resultado.stdout.strip():
+        detalle = resultado.stderr.strip() or "sin salida"
+        return [], f"Minos/Estigia (Graylog): la consulta no devolvió datos ({detalle})"
+
+    filas = []
+    lector = csv.DictReader(io.StringIO(resultado.stdout))
+    for fila in lector:
+        filas.append({
+            "hora": (fila.get("timestamp") or "").strip(),
+            "fuente": (fila.get("modulo") or "Minos").strip().capitalize(),
+            "evento": (fila.get("evento") or "").strip(),
+            "detalle": (fila.get("message") or "").strip(),
+        })
+    if not filas:
+        return [], (f"Minos/Estigia (Graylog): sin filas para la clave {cve_rastreo} "
+                     f"(¿pasaron más de {dias_retencion} días de retención?)")
+    return filas, None
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("cve_rastreo", help="Clave de rastreo a buscar en las tres fuentes.")
@@ -133,6 +193,12 @@ def main():
                    help="Unidad systemd a consultar -- cambia a estigia.service/pluton.service/etc. para seguir otros tramos.")
     p.add_argument("--ssh-identity", default=None,
                    help="Llave SSH a usar (-i). Si el agente ya tiene la llave cargada en su propio ssh-agent no hace falta -- en este repo normalmente sí hace falta pasar la ruta explícita (ver AGENTS.md).")
+    p.add_argument("--graylog-ssh", default="hermes@192.168.1.52",
+                   help="Host SSH desde el que se ejecuta el curl a Graylog (la API solo es alcanzable desde dentro de esta VM).")
+    p.add_argument("--graylog-dias-retencion", type=int, default=10,
+                   help="Días de retención configurados en Graylog (confirmado 10 por el equipo de Pedro, 2026-10-09).")
+    p.add_argument("--sin-graylog", action="store_true",
+                   help="Omite la consulta a Graylog (Minos/Estigia) -- útil si GRAYLOG_API_TOKEN todavía no está configurado.")
     args = p.parse_args()
 
     advertencias = []
@@ -152,6 +218,13 @@ def main():
     filas += fj
     if adv:
         advertencias.append(adv)
+
+    if not args.sin_graylog:
+        fg, adv = filas_minos_graylog(args.graylog_ssh, args.cve_rastreo,
+                                       args.graylog_dias_retencion, args.ssh_identity)
+        filas += fg
+        if adv:
+            advertencias.append(adv)
 
     if not filas:
         log(f"Sin resultados en ninguna fuente para clave de rastreo {args.cve_rastreo}.")
