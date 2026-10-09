@@ -114,6 +114,7 @@ public final class ControlServer {
 				exchange -> dispatch(exchange, ex -> triggerAbono(ex, speiServer, false)));
 		httpServer.createContext("/abonos/carga", exchange -> dispatch(exchange, ex -> loadCampaign(ex, speiServer)));
 		httpServer.createContext("/abonos", exchange -> dispatch(exchange, ex -> triggerCustomAbono(ex, speiServer)));
+		httpServer.createContext("/traspasos", exchange -> dispatch(exchange, ex -> triggerAvisoTraspaso(ex, speiServer)));
 		httpServer.createContext("/heartbeat/detener",
 				exchange -> dispatch(exchange, ex -> stopHeartbeat(ex, speiServer)));
 		httpServer.createContext("/test-runs", exchange -> dispatch(exchange, ex -> testRuns(ex, store)));
@@ -262,6 +263,40 @@ public final class ControlServer {
 		}
 		return Response.ok(Map.of("status", "enviado", "tipoPg", tipoPg, "firma", signatureMode.name(),
 				"runId", session.runId()));
+	}
+
+	/**
+	 * Extension de laboratorio (ticket 4960): {@code POST /traspasos} -- manda un aviso de traspaso SIAC.
+	 * Cuerpo: {@code {"tipo": 10, "trackingKey": "opcional", "monto": 1.00, "detalle": "opcional"}}.
+	 */
+	private Response triggerAvisoTraspaso(HttpExchange exchange, SpeiServer speiServer) throws IOException {
+		if (!"POST".equals(exchange.getRequestMethod())) {
+			return Response.methodNotAllowed();
+		}
+		SpeiSession session = speiServer.lastSession();
+		if (session == null || !session.isAlive()) {
+			return Response.of(409, Map.of("error", "no-hay-sesion-viva",
+					"detalle", "No hay una sesión SPEI viva todavía -- conecta minos primero."));
+		}
+		String rawBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		Map<String, Object> request;
+		try {
+			request = JsonReader.readObject(rawBody.isBlank() ? "{}" : rawBody);
+		} catch (IllegalArgumentException e) {
+			return Response.of(400, Map.of("error", "json-invalido", "detalle", String.valueOf(e.getMessage())));
+		}
+		int tipo = request.get("tipo") instanceof Number n ? n.intValue() : 10;
+		String clave = request.get("trackingKey") instanceof String s && !s.isBlank() ? s : "TRASP" + System.currentTimeMillis();
+		java.math.BigDecimal monto = request.get("monto") instanceof Number n
+				? new java.math.BigDecimal(n.toString()) : new java.math.BigDecimal("1.00");
+		String detalle = request.get("detalle") instanceof String s ? s : "";
+		try {
+			session.sendAvisoTraspaso(tipo, clave, monto, detalle);
+		} catch (Exception e) {
+			logger.error("[Control] Error mandando aviso de traspaso: {}", e.getMessage(), e);
+			return Response.of(500, Map.of("error", "error-interno", "detalle", String.valueOf(e.getMessage())));
+		}
+		return Response.ok(Map.of("status", "enviado", "tipo", tipo, "trackingKey", clave, "runId", session.runId()));
 	}
 
 	/**

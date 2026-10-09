@@ -789,6 +789,37 @@ public final class SpeiSession implements Runnable {
 		sendAbono(spec, "enviado", "tipoPg=" + paymentType + ", firma=" + signatureMode);
 	}
 
+	/**
+	 * Extension de laboratorio (ticket 4960, 4.a ronda): manda un aviso de traspaso SIAC (opcode 30), el
+	 * mensaje que en produccion Banxico manda al participante y que minos reenvia a radamanto
+	 * (/minos/traspaso/recibir). Cifrado y firmado, en un solo frame sin particion (como lo parsea
+	 * AvisoTraspasoSiacSpeiMessage: tamanoFirma(4) + payload + firma Base64).
+	 */
+	public void sendAvisoTraspaso(int transferType, String trackingKey, java.math.BigDecimal amount, String details)
+			throws Exception {
+		if (!alive) {
+			throw new IllegalStateException("No hay sesión SPEI viva todavía, no se puede mandar el aviso de traspaso");
+		}
+		byte[] detailBytes = details.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+		mx.endcom.hermes.banxicosim.wire.ByteWriter w = new mx.endcom.hermes.banxicosim.wire.ByteWriter();
+		w.writeDateTime(java.time.LocalDateTime.now());
+		w.writeDate(LocalDate.now());
+		w.writeIntBE((int) (System.currentTimeMillis() % 1_000_000));
+		w.writeShortBE(transferType);
+		w.writeCString(trackingKey);
+		w.writeMoney(amount);
+		w.writeIntBE(detailBytes.length);
+		w.writeBytes(detailBytes);
+		w.writeMoney(java.math.BigDecimal.ZERO); // saldo
+		w.writeMoney(java.math.BigDecimal.ZERO); // saldo reservado
+		byte[] body = WireFraming.encryptSession(
+				WireFraming.signedBlock(w.toByteArray(), identity.privateKey()), sessionKey, sessionIv);
+		sendConVariacion("AvisoTraspasoSiac", Frame.of(SpeiProtocol.OP_AVISO_TRASPASO_SIAC, body));
+		store.logEvent(runId, "OUT", "AvisoTraspasoSiac", SpeiProtocol.OP_AVISO_TRASPASO_SIAC, "enviado",
+				"tipo=" + transferType + ", claveRastreo=" + trackingKey, body);
+		logger.info("[SPEI] >> AvisoTraspasoSiac tipo={} claveRastreo={} monto={}", transferType, trackingKey, amount);
+	}
+
 	private void sendAbono(AbonosCodec.AbonoVSpec spec, String logResult, String logDescription) throws Exception {
 		byte[] abonoV = AbonosCodec.buildAbonoV(spec, identity.privateKey());
 

@@ -35,6 +35,8 @@ public final class SpeiProtocol {
 	public static final int OP_CLVSIM = 80;
 	public static final int OP_MSJCATALOGOS = 31;
 	public static final int OP_ABONOS = 25;
+	/** Aviso de traspaso SIAC hacia el participante (minos: AVISOTRASPASOSIACSPEI = 30). */
+	public static final int OP_AVISO_TRASPASO_SIAC = 30;
 	public static final int OP_ACUSERECIBO = 27;
 	public static final int OP_AREYOUALIVE = 245;
 	// Spec 003 -- FinReenvioMessage.OP, ver ToSpeiInputMessage.
