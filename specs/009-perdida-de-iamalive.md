@@ -16,6 +16,13 @@ Banxico si la conexión TCP se cierra de verdad (FIN/RST), no por ausencia de me
 del heartbeat es Banxico -- el simulador manda `AreYouAlive` cada 3 segundos (`startHeartbeat()`) y
 minos responde `IAmAlive`, pero minos nunca usa su ausencia para decidir nada.
 
+**Confirmado por el equipo de minos (Pedro, 2026-10-09):** verificado en su código, coincide con lo
+de arriba. Agregan un detalle que no habíamos visto: si el timeout de 6s cae **a mitad de la
+lectura de un mensaje** (no entre mensajes), los bytes ya leídos de ese mensaje se pierden -- no
+solo se ignora el timeout, el mensaje parcial en sí desaparece. Ya quedó registrado en su backlog
+para corregirse; no es algo que este simulador pueda probar o mitigar (es estado interno de
+`SpeiInputListener`, no algo que dependa de qué o cuándo manda Banxico).
+
 **Implicación que vale la pena escalar (no solo de testing):** si Banxico real alguna vez se queda
 silencioso a nivel de red sin mandar un FIN/RST limpio (firewall que descarta paquetes en
 silencio, por ejemplo), minos se quedaría creyendo la sesión viva indefinidamente, sin ningún
