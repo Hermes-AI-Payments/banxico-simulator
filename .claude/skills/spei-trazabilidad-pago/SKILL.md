@@ -10,7 +10,9 @@ allowed-tools: Bash
 
 Junta cuatro fuentes por clave de rastreo (`cveRastreo`) y las ordena en una sola línea de tiempo:
 
-1. **Judeca** (vía SSH + `journalctl`) -- el tramo más detallado, procesamiento interno paso a paso.
+1. **Judeca** (vía SSH + `docker logs`, contenedor `hermes-judeca` -- el laboratorio migró de
+   systemd a Docker el 2026-10-12, `journalctl -u judeca.service` ya no funciona) -- el tramo más
+   detallado, procesamiento interno paso a paso.
 2. **Minos/Estigia** (vía Graylog, confirmado por el equipo de Pedro 2026-10-09 -- ver "Fuente
    Graylog" abajo) -- cubre Minos A/B/C y Estigia, todo salvo los access logs de Tomcat.
 3. **Este simulador** (`GET /test-runs/{id}/events`, ya filtrado por clave desde spec 015) -- cuándo
@@ -38,28 +40,38 @@ terminó y hay una sesión más nueva encima, hay que dar `--run-id` a mano (el 
 reciente con esa clave no siempre es el de la sesión activa).
 
 Flags para apuntar a otro laboratorio (todos tienen default para `.200`/`.52`):
-`--simulator-url`, `--core-falso-url`, `--judeca-ssh`, `--judeca-unidad` (cambia a
-`estigia.service`/`pluton.service`/`radamanto.service` para seguir otros tramos con el mismo
-patrón de columnas si Judeca no alcanza), `--graylog-ssh`, `--sin-graylog` (omite esa fuente si
-`GRAYLOG_API_TOKEN` todavía no está configurado).
+`--simulator-url`, `--core-falso-url`, `--judeca-ssh`, `--judeca-contenedor` (default
+`hermes-judeca`, cambia a `hermes-estigia`/`hermes-pluton`/`hermes-radamanto` para seguir otros
+tramos con el mismo patrón de columnas si Judeca no alcanza), `--graylog-ssh`, `--sin-graylog`
+(omite esa fuente si `GRAYLOG_API_TOKEN` todavía no está configurado).
 
 ## Fuente Graylog (Minos/Estigia)
 
 Requiere la variable de entorno `GRAYLOG_API_TOKEN` (el token de solo-lectura que el equipo de
-Pedro emitió para el usuario `miguel`, válido 90 días) -- **nunca la pegues en el chat ni la pases
-como argumento del script**; expórtala en tu propia terminal antes de correrlo:
+Pedro emitió para el usuario `miguel`, vence el 2027-01-07) -- **nunca la pegues en el chat ni la
+pases como argumento del script**; expórtala en tu propia terminal antes de correrlo (mejor en
+`~/.zshrc` o equivalente, para que persista entre sesiones):
 
 ```bash
 export GRAYLOG_API_TOKEN=<el token que te compartió Pedro>
 ```
 
-El script la lee de ahí y la manda al host `.52` por el canal SSH (ya cifrado) vía stdin, nunca
-como argumento de proceso -- así no queda visible en `ps` del host remoto ni en el historial de
-shell local. Retención confirmada: 10 días. El campo `clave_rastreo` está indexado pero viene vacío
-para Minos y Estigia, así que ahí se busca por `message:"<clave>"` (igual que con Judeca). El
-`timestamp` que regresa Graylog es el valor UTC con precisión de milisegundos que la propia
-aplicación registró (no `gl2_receive_timestamp`), así que es comparable directamente con las horas
-de las otras tres fuentes.
+**Mecanismo de autenticación real, confirmado por Pedro el 2026-10-12** (no es Bearer, como se
+asumió al principio): HTTP Basic -- el token va como usuario y la palabra literal `token` como
+contraseña (`curl -u "<token>:token"`), más el header `X-Requested-By` (Graylog lo exige como
+anti-CSRF). El script arma esto como config de curl (`-K -`, por stdin) en vez de pasarlo como
+argumento `-u`/`-H`, para que el token nunca aparezca en `ps` de ningún host mientras el proceso
+corre -- ni local ni remoto.
+
+Pedro recomienda abrir un túnel local (`ssh -L 9000:127.0.0.1:9000 hermes@192.168.1.52`) y pegar
+el curl directo; este script en cambio ejecuta el curl *dentro* de la VM por SSH (sin túnel) --
+logra lo mismo (Graylog solo escucha en `127.0.0.1:9000` de esa VM) sin dejar un túnel abierto.
+
+Retención confirmada: 10 días. El campo `clave_rastreo` está indexado pero viene vacío para Minos
+y Estigia, así que ahí se busca por `message:"<clave>"` (igual que con Judeca). El `timestamp` que
+regresa Graylog es el valor UTC con precisión de milisegundos que la propia aplicación registró
+(no `gl2_receive_timestamp`), así que es comparable directamente con las horas de las otras
+fuentes.
 
 ## Cómo presentarlo
 
@@ -75,19 +87,21 @@ usuario pide, no el camino normal.
 
 ## Si Judeca no trae nada
 
-Antes de asumir que algo falló, considera: ¿la orden es muy vieja (el log pudo rotar)? ¿la clave
-de rastreo es exacta (sensible a mayúsculas/guiones)? ¿la sesión SSH tiene la llave correcta
+Antes de asumir que algo falló, considera: ¿la orden es muy vieja (`docker logs --since 24h` es la
+ventana por default -- sube `--judeca-desde` si hace falta más)? ¿la clave de rastreo es exacta
+(sensible a mayúsculas/guiones)? ¿la sesión SSH tiene la llave correcta
 (`~/.ssh/id_ed25519_conecta` en esta máquina, ver `AGENTS.md` del repo raíz de este laboratorio)?
-Si el formato de línea de Judeca cambió (otra versión, otro `modulo=`), el script lo dice
-explícitamente ("el formato no coincidió con el patrón esperado") en vez de fallar en silencio --
-si eso pasa, hay que actualizar `LINEA_JUDECA` en `scripts/timeline.py` contra una línea real
-nueva, no adivinar.
+¿el contenedor se llama distinto en este despliegue (`docker ps` para confirmar, en vez de asumir
+`hermes-judeca`)? Si el formato de línea de Judeca cambió (otra versión, otro `modulo=`), el
+script lo dice explícitamente ("el formato no coincidió con el patrón esperado") en vez de fallar
+en silencio -- si eso pasa, hay que actualizar `LINEA_JUDECA` en `scripts/timeline.py` contra una
+línea real nueva, no adivinar.
 
 ## Resuelto (spec 015, era "pendiente")
 
 El equipo de Pedro confirmó (2026-10-09) acceso de solo-lectura a Graylog, cubriendo todos los
 módulos salvo Tomcat -- implementado como la cuarta fuente (`filas_minos_graylog`), ver arriba. La
-fuente de Judeca **sigue siendo SSH + `journalctl`** a propósito (no se reemplazó): Graylog cubre
+fuente de Judeca **sigue siendo SSH + `docker logs`** a propósito (no se reemplazó): Graylog cubre
 Minos/Estigia, que antes no teníamos forma de ver; Judeca ya teníamos un camino confiable y
 cambiarlo no aporta nada nuevo. Si en el futuro se decide consolidar también Judeca sobre Graylog,
 es un cambio aparte, no asumido aquí.

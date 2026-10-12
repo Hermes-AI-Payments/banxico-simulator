@@ -58,6 +58,20 @@ No hay forma de "deshacer" un reset ya disparado -- la limpieza aquí es
 simplemente confirmar que la sesión murió como se esperaba; no queda ningún
 qdisc ni estado pendiente que revertir (a diferencia de netem).
 
+**Advertencia confirmada 2026-10-12 (capa A, vía `tipo:"corte"` -- aplica igual a capa B):** en el
+despliegue actual del laboratorio, minos **no reconecta solo** tras un corte -- el log del
+contenedor (`docker logs hermes-minosa`, ver nota de migración abajo) registra explícitamente
+`"Autoreconexion apagada"` al perder la conexión. Antes de disparar cualquier escenario de corte,
+dile al usuario que la sesión va a quedar caída hasta que alguien la reconecte manualmente (no es
+un efecto de unos segundos, como se documentó antes) -- y no reinicies el contenedor de minos por
+tu cuenta para "arreglarlo": es infraestructura compartida, pregunta primero.
+
+**Nota de migración (2026-10-12):** el laboratorio pasó de systemd a Docker -- `netem.sh detect`
+asume `docker` directamente (eso no cambió, ya apuntaba a un contenedor). Lo que sí cambió es que
+los módulos de minos/Judeca/etc. en `.52` ya no son `systemctl`/`journalctl` (unit "could not be
+found"), ahora son contenedores (`hermes-minosa`, `hermes-judeca`, ...) -- si necesitas sus logs
+para confirmar un efecto, usa `docker logs <contenedor>` contra `.52`, no `journalctl -u`.
+
 ## Procedimiento: throttling asimétrico (fila 6)
 
 `scripts/netem.sh` no automatiza este caso por su complejidad (requiere el

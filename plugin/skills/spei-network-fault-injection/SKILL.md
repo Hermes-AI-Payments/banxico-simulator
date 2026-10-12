@@ -182,3 +182,6 @@ comando.
   el usuario pide que un abono "no llegue", eso es un corte abrupto (fila 5), no
   `loss` -- acláralo en el plan en vez de prometer pérdida de mensajes (spec 005 ya anotaba esta ambigüedad, ligada a que spec 001 de
   particionado real tampoco resuelve retransmisión granular).
+- **Un corte abrupto deja la sesión caída indefinidamente (confirmado 2026-10-12):** en este
+  despliegue minos no reconecta solo (`"Autoreconexion apagada"` en su log) -- ver el detalle y la
+  advertencia completa en `references/spec-005-scenarios.md` §"Procedimiento: corte abrupto".

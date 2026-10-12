@@ -15,7 +15,6 @@ import io
 import json
 import os
 import re
-import shlex
 import ssl
 import subprocess
 import sys
@@ -82,29 +81,35 @@ def filas_core_falso(core_falso_url, test_id):
     }], None
 
 
-#   Oct 07 03:20:49 hermes bash[...]: 2026-10-07 03:20:49 589 | [ INFO] - [     thread-1] - [clase.Java] | modulo=JUDECA | claveRastreo=X | evento=Y | mensaje
+#   2026-10-12 17:45:40 643 | [ INFO] - [     thread-1] - [clase.Java] | modulo=JUDECA | claveRastreo=X | evento=Y | mensaje
 # Los corchetes de nivel/hilo/clase se matchean con "cualquier cosa menos ]" -- el nombre del hilo
 # trae guiones y relleno de espacios variable (p.ej. "EnvioOrdenes-1"), no son solo \w.
+#
+# Corregido 2026-10-12 -- el laboratorio migró de systemd a Docker (`journalctl -u judeca.service`
+# ya no existe, el unit "could not be found"; ahora es el contenedor `hermes-judeca`). Confirmado
+# contra `docker logs hermes-judeca` real: el formato de la línea de aplicación es IDÉNTICO, solo
+# ya no trae el prefijo de journald/bash (`Oct 07 03:20:49 hermes bash[...]: `) que sí envolvía la
+# línea cuando el visor era `journalctl` -- por eso el regex ya no lo espera al inicio.
 LINEA_JUDECA = re.compile(
-    r"^\w+ \d+ \d+:\d+:\d+ \S+ \S+: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\d+) \| "
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\d+) \| "
     r"\[([^\]]*)\] - \[([^\]]*)\] - \[([^\]]*)\] \| modulo=(\w+) \| claveRastreo=[^|]* \| evento=([^|]*) \| (.*)$"
 )
 
 
-def filas_judeca(judeca_ssh, cve_rastreo, unidad, ssh_identity):
+def filas_judeca(judeca_ssh, cve_rastreo, contenedor, desde, ssh_identity):
     cmd = ["ssh"]
     if ssh_identity:
         cmd += ["-i", ssh_identity]
     cmd += [
         judeca_ssh,
-        f"journalctl -u {unidad} --no-pager | grep -F 'claveRastreo={cve_rastreo}'",
+        f"docker logs --since {desde} {contenedor} 2>&1 | grep -F 'claveRastreo={cve_rastreo}'",
     ]
     try:
         resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except Exception as e:  # noqa: BLE001
-        return [], f"{unidad}: no se pudo conectar por SSH a {judeca_ssh} ({e})"
+        return [], f"{contenedor}: no se pudo conectar por SSH a {judeca_ssh} ({e})"
     if not resultado.stdout.strip():
-        return [], f"{unidad}: sin líneas con esa clave de rastreo (¿corrió hace más de lo que retiene el log?)"
+        return [], f"{contenedor}: sin líneas con esa clave de rastreo (¿corrió hace más de {desde}? sube --judeca-desde)"
     filas = []
     sin_match = 0
     for linea in resultado.stdout.splitlines():
@@ -121,20 +126,36 @@ def filas_judeca(judeca_ssh, cve_rastreo, unidad, ssh_identity):
             "detalle": mensaje.strip(),
         })
     if not filas and sin_match:
-        return [], f"{unidad}: {sin_match} línea(s) encontradas pero el formato no coincidió con el patrón esperado -- revisa LINEA_JUDECA en este script contra una línea real"
+        return [], f"{contenedor}: {sin_match} línea(s) encontradas pero el formato no coincidió con el patrón esperado -- revisa LINEA_JUDECA en este script contra una línea real"
     return filas, None
+
+
+def _curl_config_valor(valor):
+    """Escapa un valor para una línea `opcion = "valor"` de config de curl (`-K`) -- `\\` antes
+    que `"` para no doble-escapar. Documentado en `man curl` &sect;`-K/--config`."""
+    return '"' + valor.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def filas_minos_graylog(graylog_ssh, cve_rastreo, dias_retencion, ssh_identity):
     """Consulta Graylog por `clave_rastreo` -- cubre Minos A/B/C y Estigia (todo salvo los access
     logs de Tomcat), confirmado por el equipo de Pedro el 2026-10-09 (ver specs/015 "Preguntas
-    abiertas", ahora cerradas). El campo `clave_rastreo` viene indexado pero vacío para Minos y
-    Estigia -- ahí se busca por `message:"<clave>"`, igual que con Judeca.
+    abiertas") y con el mecanismo exacto de autenticación confirmado el 2026-10-12. El campo
+    `clave_rastreo` viene indexado pero vacío para Minos y Estigia -- ahí se busca por
+    `message:"<clave>"`, igual que con Judeca.
 
-    Se ejecuta por SSH *dentro* de la .52 (no hace falta túnel local: la API de Graylog solo es
-    alcanzable desde dentro de esa VM). El token nunca viaja por línea de comandos -- se lee
-    localmente de la variable de entorno GRAYLOG_API_TOKEN y se manda al host remoto por stdin del
-    túnel SSH (ya cifrado), nunca como argumento de un proceso que `ps` pudiera mostrar en la .52.
+    **Autenticación real (Pedro, 2026-10-12):** HTTP Basic, NO Bearer -- el token va como usuario
+    y la palabra literal `token` como contraseña (`curl -u "<token>:token"`), más el header
+    `X-Requested-By` (cualquier valor no vacío, Graylog lo exige como anti-CSRF). Se arma como
+    config de curl (`-K -`, vía stdin) en vez de pasar `-u`/`-H` como argumentos: así el token
+    nunca aparece en la lista de procesos (`ps`) de NINGÚN host, ni local ni remoto -- a diferencia
+    de pasarlo en un argumento `-H`/`-u` expandido desde una variable de shell, que sigue siendo
+    visible en `ps` mientras el proceso corre aunque el valor nunca toque el historial de shell.
+
+    Se ejecuta por SSH *dentro* de la .52 (no hace falta túnel local -- la API de Graylog solo es
+    alcanzable desde dentro de esa VM; Pedro recomienda un túnel `ssh -L` desde tu máquina, pero
+    ejecutar el curl remoto directo logra lo mismo sin dejar un túnel abierto). El token se lee
+    localmente de la variable de entorno GRAYLOG_API_TOKEN -- nunca se pide por argumento ni se
+    pega en el chat.
     """
     token = os.environ.get("GRAYLOG_API_TOKEN")
     if not token:
@@ -146,20 +167,25 @@ def filas_minos_graylog(graylog_ssh, cve_rastreo, dias_retencion, ssh_identity):
     body = json.dumps({
         "query_string": {"type": "elasticsearch", "query_string": query},
         "timerange": {"type": "relative", "range": dias_retencion * 86400},
-        "streams": [],
         "fields_in_order": ["timestamp", "modulo", "evento", "clave_rastreo", "message"],
+        "limit": 500,
     })
-    remote_cmd = (
-        "TOKEN=$(cat); curl -s -X POST http://127.0.0.1:9000/api/views/search/messages "
-        '-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" '
-        '-H "Accept: text/csv" -d ' + shlex.quote(body)
-    )
+    curl_config = "\n".join([
+        f"url = {_curl_config_valor('http://127.0.0.1:9000/api/views/search/messages')}",
+        f"user = {_curl_config_valor(token + ':token')}",
+        f"header = {_curl_config_valor('X-Requested-By: cli')}",
+        f"header = {_curl_config_valor('Content-Type: application/json')}",
+        f"data = {_curl_config_valor(body)}",
+        "silent",
+        "show-error",
+    ]) + "\n"
+
     cmd = ["ssh"]
     if ssh_identity:
         cmd += ["-i", ssh_identity]
-    cmd += [graylog_ssh, remote_cmd]
+    cmd += [graylog_ssh, "curl -K -"]
     try:
-        resultado = subprocess.run(cmd, input=token, capture_output=True, text=True, timeout=30)
+        resultado = subprocess.run(cmd, input=curl_config, capture_output=True, text=True, timeout=30)
     except Exception as e:  # noqa: BLE001
         return [], f"Minos/Estigia (Graylog): no se pudo conectar por SSH a {graylog_ssh} ({e})"
     if resultado.returncode != 0 or not resultado.stdout.strip():
@@ -189,8 +215,14 @@ def main():
     p.add_argument("--simulator-url", default="http://192.168.1.200:8089")
     p.add_argument("--core-falso-url", default="https://192.168.1.52:3000")
     p.add_argument("--judeca-ssh", default="hermes@192.168.1.52")
-    p.add_argument("--judeca-unidad", default="judeca.service",
-                   help="Unidad systemd a consultar -- cambia a estigia.service/pluton.service/etc. para seguir otros tramos.")
+    p.add_argument("--judeca-contenedor", default="hermes-judeca",
+                   help="Contenedor Docker a consultar (docker logs) -- cambia a hermes-estigia/"
+                        "hermes-pluton/hermes-radamanto/etc. para seguir otros tramos. El "
+                        "laboratorio migró de systemd a Docker el 2026-10-12 -- journalctl ya no "
+                        "funciona para estos módulos (unit \"could not be found\").")
+    p.add_argument("--judeca-desde", default="24h",
+                   help="Ventana de 'docker logs --since' (formato de Docker, ej. 24h, 10m, "
+                        "2026-10-12T00:00:00) -- sube esto si la orden que buscas es más vieja.")
     p.add_argument("--ssh-identity", default=None,
                    help="Llave SSH a usar (-i). Si el agente ya tiene la llave cargada en su propio ssh-agent no hace falta -- en este repo normalmente sí hace falta pasar la ruta explícita (ver AGENTS.md).")
     p.add_argument("--graylog-ssh", default="hermes@192.168.1.52",
@@ -214,7 +246,8 @@ def main():
     if adv:
         advertencias.append(adv)
 
-    fj, adv = filas_judeca(args.judeca_ssh, args.cve_rastreo, args.judeca_unidad, args.ssh_identity)
+    fj, adv = filas_judeca(args.judeca_ssh, args.cve_rastreo, args.judeca_contenedor,
+                           args.judeca_desde, args.ssh_identity)
     filas += fj
     if adv:
         advertencias.append(adv)
