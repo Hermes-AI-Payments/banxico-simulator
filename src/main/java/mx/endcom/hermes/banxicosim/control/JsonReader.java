@@ -1,15 +1,25 @@
 package mx.endcom.hermes.banxicosim.control;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Lector JSON mínimo, escrito a mano -- misma razón que {@link Json} (ver AGENTS.md &sect;4, "sin
  * frameworks"). Solo soporta lo que necesitan los endpoints de la API de control que aceptan
- * cuerpo: objetos planos de {@link String}/{@link Number}/{@link Boolean}, y un nivel de objeto
- * anidado (para el mapa "campos" de un abono con tipo de pago arbitrario). No es un parser JSON de
- * propósito general -- si algún endpoint necesita más (arreglos, más niveles de anidamiento), hay
- * que ampliarlo aquí, no reintroducir una librería.
+ * cuerpo: objetos planos de {@link String}/{@link Number}/{@link Boolean}, arreglos de esos
+ * mismos valores (incluido arreglos de objetos, para "entradas" de {@code POST /pagos/cargos}), y
+ * un nivel de objeto anidado (para el mapa "campos" de un abono con tipo de pago arbitrario). No
+ * es un parser JSON de propósito general -- si algún endpoint necesita más (más niveles de
+ * anidamiento del que ya soporta), hay que ampliarlo aquí, no reintroducir una librería.
+ *
+ * <p><b>Corregido 2026-10-12:</b> {@code parseValue} no tenía ningún caso para {@code [} -- todo
+ * arreglo caía al fallback de {@link #parseNumber()} y tronaba con "valor inesperado". Esto hacía
+ * que {@code POST /pagos/cargos} (su único body documentado trae {@code "entradas": [...]}) fuera
+ * imposible de llamar tal como su propio Javadoc lo describe -- confirmado en vivo contra el
+ * simulador real (spec 014, prueba de fase 5). No era un caso límite sin cubrir, era el único
+ * camino documentado del endpoint, ya roto antes de esta corrección.</p>
  */
 final class JsonReader {
 
@@ -69,6 +79,9 @@ final class JsonReader {
 		if (c == '{') {
 			return parseObject();
 		}
+		if (c == '[') {
+			return parseArray();
+		}
 		if (c == 't' || c == 'f') {
 			return parseBoolean();
 		}
@@ -77,6 +90,29 @@ final class JsonReader {
 			return null;
 		}
 		return parseNumber();
+	}
+
+	private List<Object> parseArray() {
+		expect('[');
+		List<Object> list = new ArrayList<>();
+		skipWs();
+		if (peek() == ']') {
+			pos++;
+			return list;
+		}
+		while (true) {
+			skipWs();
+			list.add(parseValue());
+			skipWs();
+			char c = next();
+			if (c == ']') {
+				break;
+			}
+			if (c != ',') {
+				throw new IllegalArgumentException("JSON inválido: se esperaba ',' o ']' en la posición " + pos);
+			}
+		}
+		return list;
 	}
 
 	private String parseString() {
